@@ -1,13 +1,13 @@
 # conda env create --file neuralangelo.yaml
 name: neuralangelo
 channels:
-  - conda-forge
   - pytorch
+  - conda-forge
 dependencies:
   # general
   - gpustat
   - gdown
-  - cudatoolkit-dev
+  #- cudatoolkit-dev # maybe no need to install if CUDA driver is already installed on the system
   - cmake
   # python general
   - python=3.8
@@ -20,7 +20,9 @@ dependencies:
   - ninja
   - diskcache
   # pytorch
-  - pytorch
-  - torchvision
+  - pytorch==1.7.1
+  - torchvision==0.8.2
+  - cudatoolkit==11.0
   - pip:
     - -r requirements.txt
+prefix: /research/d1/msc/txyang23/SOFTWARE/miniconda/env/neuralangelo
