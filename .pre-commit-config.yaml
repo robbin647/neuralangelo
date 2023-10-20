@@ -4,4 +4,4 @@ repos:
   hooks:
   - id: flake8
     args: [--max-line-length=120]
-    exclude: third_party
+    exclude: thirdparty

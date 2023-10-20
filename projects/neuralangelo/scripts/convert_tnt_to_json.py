@@ -23,8 +23,8 @@ sys.path.append(dir_path.__str__())
 
 from projects.neuralangelo.scripts.convert_data_to_json import export_to_json  # NOQA
 
-from third_party.colmap.scripts.python.database import COLMAPDatabase  # NOQA
-from third_party.colmap.scripts.python.read_write_model import read_model, rotmat2qvec  # NOQA
+from thirdparty.colmap.scripts.python.database import COLMAPDatabase  # NOQA
+from thirdparty.colmap.scripts.python.read_write_model import read_model, rotmat2qvec  # NOQA
 
 
 def create_init_files(pinhole_dict_file, db_file, out_dir):
