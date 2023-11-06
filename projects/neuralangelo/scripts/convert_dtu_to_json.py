@@ -56,7 +56,7 @@ def load_K_Rt_from_P(filename, P=None):
 
 def dtu_to_json(args):
     assert args.dtu_path, "Provide path to DTU dataset"
-    scene_list = os.listdir(args.dtu_path)
+    scene_list = args.only_scene if args.only_scene is not None else os.listdir(args.dtu_path)
 
     for scene in scene_list:
         scene_path = os.path.join(args.dtu_path, scene)
@@ -75,7 +75,7 @@ def dtu_to_json(args):
         }
 
         camera_param = dict(np.load(os.path.join(scene_path, 'cameras_sphere.npz')))
-        images_lis = sorted(glob(os.path.join(scene_path, 'image/*.png')))
+        images_lis = sorted(glob(os.path.join(scene_path, f'{args.image_folder}/*.png')))
         for idx, image in enumerate(images_lis):
             image = os.path.basename(image)
 
@@ -88,7 +88,7 @@ def dtu_to_json(args):
             intrinsic_param, c2w = load_K_Rt_from_P(None, P)
             c2w_gl = _cv_to_gl(c2w)
 
-            frame = {"file_path": 'image/' + image, "transform_matrix": c2w_gl.tolist()}
+            frame = {"file_path": f'{args.image_folder}/' + image, "transform_matrix": c2w_gl.tolist()}
             out["frames"].append(frame)
 
         fl_x = intrinsic_param[0][0]
@@ -97,7 +97,7 @@ def dtu_to_json(args):
         cy = intrinsic_param[1][2]
         sk_x = intrinsic_param[0][1]
         sk_y = intrinsic_param[1][0]
-        w, h = Image.open(os.path.join(scene_path, 'image', image)).size
+        w, h = Image.open(os.path.join(scene_path, f'{args.image_folder}', image)).size
 
         angle_x = math.atan(w / (fl_x * 2)) * 2
         angle_y = math.atan(h / (fl_y * 2)) * 2
@@ -129,6 +129,17 @@ def dtu_to_json(args):
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--dtu_path', type=str, default=None)
+    def parse_scene_list(str) -> list:
+        """
+        INPUT
+        -----------
+        str: a string of DTU scene names separated by commas
+        """
+        if str == "":
+            raise argparse.ArgumentTypeError("Scene list cannot be empty")
+        return str.strip().split(",")
+    parser.add_argument("--only_scene", type=parse_scene_list, required=False)
+    parser.add_argument('--image_folder', type=str, default="image")
 
     args = parser.parse_args()
 
