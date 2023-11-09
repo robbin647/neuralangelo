@@ -53,7 +53,7 @@ def generate_config(args):
     # data config
     cfg.data.type = "projects.neuralangelo.data"
     cfg.data.root = args.data_dir
-    img = Image.open(os.path.join(args.data_dir, "images", os.listdir(os.path.join(args.data_dir, "images"))[0]))
+    img = Image.open(os.path.join(args.data_dir, args.src_image_folder, os.listdir(os.path.join(args.data_dir, "images"))[0]))
     w, h = img.size
     cfg.data.train.image_size = [h, w]
     short_size = args.val_short_size
@@ -79,5 +79,7 @@ if __name__ == "__main__":
                              "indoor for room-scale reconstruction; object for object-centric scene reconstruction.")
     parser.add_argument("--val_short_size", type=int, default=300,
                         help="Set the short side of validation images (for saving compute when rendering val images)")
+    parser.add_argument('--src_image_folder', type=str, default="images",
+                        help="Path to folder of source images to be used in training and validation. Defaulted to \"images\" as COLMAP output.")
     args = parser.parse_args()
     generate_config(args)
