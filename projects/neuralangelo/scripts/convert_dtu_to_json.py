@@ -139,7 +139,7 @@ if __name__ == '__main__':
             raise argparse.ArgumentTypeError("Scene list cannot be empty")
         return str.strip().split(",")
     parser.add_argument("--only_scene", type=parse_scene_list, required=False)
-    parser.add_argument('--image_folder', type=str, default="image")
+    parser.add_argument('--image_folder', type=str, default="images")
 
     args = parser.parse_args()
 
