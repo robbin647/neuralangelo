@@ -53,7 +53,7 @@ def generate_config(args):
     # data config
     cfg.data.type = "projects.neuralangelo.data"
     cfg.data.root = args.data_dir
-    img = Image.open(os.path.join(args.data_dir, args.src_image_folder, os.listdir(os.path.join(args.data_dir, "images"))[0]))
+    img = Image.open(os.path.join(args.data_dir, args.src_image_folder, os.listdir(os.path.join(args.data_dir, args.src_image_folder))[0]))
     w, h = img.size
     cfg.data.train.image_size = [h, w]
     short_size = args.val_short_size

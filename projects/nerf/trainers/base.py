@@ -134,7 +134,11 @@ class BaseTrainer(BaseTrainer):
             data_loader = tqdm(data_loader, desc="Evaluating", leave=False)
         data_batches = []
         for it, data in enumerate(data_loader):
+            # data is a dict with keys ['idx', 'image', 'intr', 'pose']
             data = self.start_of_iteration(data, current_iteration=self.current_iteration)
+            # output is a dict with keys ['rgb', 'opacity', 'outside', 'dists', 'weights', 
+            #                              'gradient', 'gradients', 'depth', 'rgb_map', 
+            #                               'opacity_map', 'depth_map', 'normal_map']
             output = model.inference(data)
             data.update(output)
             data_batches.append(data)
