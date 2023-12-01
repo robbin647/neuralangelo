@@ -70,7 +70,7 @@ def dump_data(batch_data, output_dir, seq_idx):
         np.savez(os.path.join(output_dir, f"pose_{seq_idx + sample_idx}.npz"), pose=pose_mtx[sample_idx])
     # print(f"Saved {seq_idx} test sample to {output_dir}")
     
-def eval_mtrics(args):
+def eval_metrics(args):
     if torch.cuda.is_available():
         device = torch.device("cuda")
     else:
@@ -147,11 +147,6 @@ def main():
     trainer.checkpointer.load(args.checkpoint, args.resume, load_sch=True, load_opt=True)
 
     trainer.mode = 'val'
-    # # Start training.
-    # trainer.test(
-    #     data_loader = trainer.eval_data_loader,
-    #     output_dir = "/content/tmp/test",
-    #     mode="val")
 
     with torch.no_grad():
         # Initialize testing loop
@@ -174,19 +169,6 @@ def main():
             
             dump_data(data, args.dump_dir, seq_idx)
             seq_idx += data["idx"].size()[0]
-            # for idx in range(data["rgb_map"].size()[0]): # batch_size=2 by default
-            #     # set_trace()
-            #     test = data["rgb_map"].cpu().numpy()[idx]
-            #     test = np.clip(test*255, 0, 255)
-            #     test = np.transpose(test, [1,2,0])
-            #     test = cv2.cvtColor(test, cv2.COLOR_RGB2BGR)
-            #     save_img_path = os.path.join(IMG_OUT, f"test_iter_{it+1}_no_{idx+1}.PNG")
-            #     save_trans_mtx_path = os.path.join(IMG_OUT, f"test_iter_{it+1}_no_{idx+1}.npz")
-            #     cv2.imwrite(save_img_path, test)
-            #     print("Writing batch index %d to %s".format(idx+1, save_img_path))
-            #     pose_mtx = data["pose"][idx].cpu().numpy()
-            #     np.savez(save_trans_mtx_path, pose=pose_mtx)
-            #     print("Pose matrix saved to {}".format(save_trans_mtx_path))
     
         # eval_metrics(args)
 
