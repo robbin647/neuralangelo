@@ -1,4 +1,4 @@
-## Froked Neuralangelo Repository for robbin647
+## Forked Neuralangelo Repository for robbin647
 
 ### My contribution
 
@@ -14,6 +14,7 @@ The minimal way to run this script is to pass 3 command line parameters. The `--
     --dump_dir={path to dump results} \
     --config={path to Neuralangelo configuration file} \
     --checkpoint={the path to pretrained Neuralangelo checkpoint } \
+    --single_gpu # if you want to train using single gpu
 ```
 
 At the current stage, it is required that before executing this script, the same set of RGB images & `transforms.json` that was used to train the Neuralangelo model must be present. This can be configured by setting `data.root` in the Neuralangelo configuration file or by `--data.root` command line argument.

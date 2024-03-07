@@ -1,5 +1,6 @@
 # conda env create --file neuralangelo.yaml
 name: neuralangelo
+prefix: /root/autodl-tmp/neuralangelo_env
 channels:
   - pytorch
   - conda-forge
@@ -19,10 +20,11 @@ dependencies:
   - cython
   - ninja
   - diskcache
-  # pytorch
+  # >>>>> TODO: need to install following 3 pkgs
   - pytorch==1.7.1
   - torchvision==0.8.2
   - cudatoolkit==11.0
-  - pip:
-    - -r requirements.txt
-prefix: /research/d1/msc/txyang23/SOFTWARE/miniconda/env/neuralangelo
+  #>>>>> Uncomment the following pip line <<<<<
+  #- pip:
+  #  - -r requirements.txt
+#prefix: /research/d1/msc/txyang23/SOFTWARE/miniconda/env/neuralangelo

@@ -78,8 +78,13 @@ torchrun --nproc_per_node=${GPUS} projects/neuralangelo/scripts/extract_mesh.py 
     --config=${CONFIG} \
     --checkpoint=${CHECKPOINT} \
     --output_file=${OUTPUT_MESH} \
-    --resolution=${RESOLUTION} \
-    --block_res=${BLOCK_RES}
+    --resolution=512 \ 
+    --block_res=128 \
+    --textured \
+    --max_iter=30000 
+    # note: resolution=512 produces a mesh file whose size is just right (neither too large to read by blender nor too small to omit details) 
+    # --resolution=${RESOLUTION} \
+    # --block_res=${BLOCK_RES}
 ```
 Some useful notes:
 - Add `--textured` to extract meshes with textures.

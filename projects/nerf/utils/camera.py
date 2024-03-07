@@ -297,7 +297,7 @@ def get_center_and_ray(pose, intr, image_size):
         y_range = torch.arange(H, dtype=torch.float32, device=pose.device).add_(0.5)
         x_range = torch.arange(W, dtype=torch.float32, device=pose.device).add_(0.5)
         Y, X = torch.meshgrid(y_range, x_range, indexing="ij")  # [H,W]
-        xy_grid = torch.stack([X, Y], dim=-1).view(-1, 2)  # [HW,2]
+        xy_grid = torch.stack([X, Y], dim=-1).view(-1, 2)  # [HW,2] 2是指[y坐标，x坐标]
     # Compute center and ray.
     if len(pose.shape) == 3:
         batch_size = len(pose)
