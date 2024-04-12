@@ -216,6 +216,8 @@ def batched_angular_dist_rot_matrix(R1, R2):
 def get_nearest_pose_ids(tar_pose, ref_poses, num_select, tar_id=None, angular_dist_method='vector',
                          scene_center=(0, 0, 0)):
     """
+    Select `num_select` views (ref_view) whose camera poses are most similar to that of target view (tar_pose)
+    
     Args:
         tar_pose: target pose [3, 3]
         ref_poses: reference poses [N, 3, 3]

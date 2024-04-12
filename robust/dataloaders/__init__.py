@@ -22,6 +22,7 @@
 # from .realestate import *
 # from .spaces_dataset import *
 from .nerf_synthetic import *
+from .colmap_dataset import *
 
 dataset_dict = {
     # 'spaces': SpacesFreeDataset,
@@ -29,6 +30,7 @@ dataset_dict = {
     # 'realestate': RealEstateDataset,
     # 'deepvoxels': DeepVoxelsDataset,
     'nerf_synthetic': NerfSyntheticDataset,
+    'colmap_dataset': COLMAPDataset,
     # 'llff': LLFFDataset,
     # 'ibrnet_collected': IBRNetCollectedDataset,
     # 'llff_test': LLFFTestDataset,

@@ -45,7 +45,7 @@ class Projector:
 
     @staticmethod
     def normalize(pixel_locations, h, w):
-        resize_factor = torch.tensor([w - 1., h - 1.]).to(pixel_locations.device)[None, None, :]
+        resize_factor = torch.tensor([w - 1., h - 1.]).to(pixel_locations.device)[None, None, :] # [1, 1, 2]
         normalized_pixel_locations = 2 * pixel_locations / resize_factor - 1.  # [n_views, n_points, 2]
         return normalized_pixel_locations
 
@@ -85,44 +85,45 @@ class Projector:
     @staticmethod
     def compute_angle(xyz, query_camera, train_cameras):
         """
-        :param xyz: [n_rays, n_samples, 3]   
+        :param xyz: [n_rays, n_samples, 3] ##where n_samples is no. of sample points in each ray
         :param query_camera: [34, ]
         :param train_cameras: [n_views, 34]
-        :return: [n_views, ..., 4]; The first 3 channels are unit-length vector of the difference between
+        :return: [n_views, n_rays, n_samples, 4]; The first 3 channels are unit-length vector of the difference between
         query and target ray directions, the last channel is the inner product of the two directions.
         """
-        original_shape = xyz.shape[:2]
-        xyz = xyz.reshape(-1, 3)
+        original_shape = xyz.shape[:2]  # torch.Size([n_rays, n_samples])
+        xyz = xyz.reshape(-1, 3) # [n_rays * n_samples, 3]
         train_poses = train_cameras[:, -16:].reshape(-1, 4, 4)  # [n_views, 4, 4]
         num_views = len(train_poses)
-        query_pose = query_camera[-16:].reshape(-1, 4, 4).expand(num_views, 4, 4)  # [n_views, 4, 4]
-        ray2tar_pose = (query_pose[:, :3, 3].unsqueeze(1) - xyz.unsqueeze(0))
-        ray2tar_pose /= (torch.norm(ray2tar_pose, dim=-1, keepdim=True) + 1e-6)
-        ray2train_pose = (train_poses[:, :3, 3].unsqueeze(1) - xyz.unsqueeze(0))
-        ray2train_pose /= (torch.norm(ray2train_pose, dim=-1, keepdim=True) + 1e-6)
-        ray_diff = ray2tar_pose - ray2train_pose
+        query_pose = query_camera[-16:].reshape(-1, 4, 4).expand(num_views, 4, 4)  # [n_views, 4, 4] `expand` repeats the singleton dimension to the arbitrary number specified
+        ray2tar_pose = (query_pose[:, :3, 3].unsqueeze(1) - xyz.unsqueeze(0)) # [n_views, n_rays*n_samples, 3] calculate the offset of query camera's position to each sample point (`xyz`)'s position
+        ray2tar_pose /= (torch.norm(ray2tar_pose, dim=-1, keepdim=True) + 1e-6) # calculate the unit vector with the same direction as offset, i.e. for offset=(d_x, d_y, d_z) => new offset=(d_x/L, d_y/L, d_z/L) where L is the L2-norm of offset
+        ray2train_pose = (train_poses[:, :3, 3].unsqueeze(1) - xyz.unsqueeze(0)) # ibid.
+        ray2train_pose /= (torch.norm(ray2train_pose, dim=-1, keepdim=True) + 1e-6) # [n_views, n_rays*n_samples, 3] ibid.
+        ray_diff = ray2tar_pose - ray2train_pose # [n_views, n_rays*n_samples, 3]
         ray_diff_norm = torch.norm(ray_diff, dim=-1, keepdim=True)
-        ray_diff_dot = torch.sum(ray2tar_pose * ray2train_pose, dim=-1, keepdim=True)
-        ray_diff_direction = ray_diff / torch.clamp(ray_diff_norm, min=1e-6)
-        ray_diff = torch.cat([ray_diff_direction, ray_diff_dot], dim=-1)
-        ray_diff = ray_diff.reshape((num_views,) + original_shape + (4,))
+        ray_diff_dot = torch.sum(ray2tar_pose * ray2train_pose, dim=-1, keepdim=True) # [n_views, n_rays*n_samples, 1] ray2tar_pose和ray2train_pose在最后一维的向量的点积
+        ray_diff_direction = ray_diff / torch.clamp(ray_diff_norm, min=1e-6) # [n_views, n_rays*n_samples, 3]
+        ray_diff = torch.cat([ray_diff_direction, ray_diff_dot], dim=-1) # [n_views, n_rays*n_samples, 4]
+        ray_diff = ray_diff.reshape((num_views,) + original_shape + (4,)) # [n_views, n_rays, n_samples, 4]
         return ray_diff
 
     def compute(self, xyz, query_camera, src_imgs, org_src_imgs, sigma_estimate, src_cameras, featmaps):
         """ Given 3D points and the camera of the target and src views,
         computing the rgb values of the incident pixels and their kxk environment.
 
+        :param sigma_estimate: (1, N, H, W, 3)
         :param src_imgs: (1, N, W, H, 3)
-        :param xyz: 3D points along the rays [R, S, 3]
+        :param xyz: 3D points along the rays [R, S, 3] ##where S is no. of sample points along each ray
         :param query_camera: [1, 34], 34 = img_size(2) + intrinsics(16) + extrinsics(16)
         :param src_cameras: [1, N, 34]
-        :param featmaps: [N, C, H', W']
+        :param featmaps: [N, C, H', W'] ## here C=32 is the default length of encoded features
         :return: rgb_feat_sampled: [R, S, k, k, N, 3+F],
                  ray_diff: [R, S, 1, 1, N, 4],
                  3D points mask: [R, S, N, 1], 3D point is valid only if it is not behind the frame
                                                and if the projected pixel is inbound the view frame
                  org_rgbs_sampled: [R, S, k, k, N, 3+F],
-                 sigma_estimate: [R, S, k, k, N, 3+F]
+                 sigma_estimate: [R, S, k, k, N, 3] standard deviation of noise calculated per pixel, per color channel
         """
         assert (src_imgs.shape[0] == 1) \
                and (src_cameras.shape[0] == 1) \
@@ -138,37 +139,38 @@ class Projector:
         query_camera = query_camera.squeeze(0)  # [34, ]
 
         # compute the projection of the query points to each reference image
-        xys, mask = self.compute_projections(xyz, src_cameras)  # [n_views, n_rays, n_samples * prod(kernel_size), 2]
-        h, w = src_cameras[0][:2]
-        norm_xys = self.normalize(xys, h, w)  # [n_views, n_rays, n_samples, 2]
+        xys, mask = self.compute_projections(xyz, src_cameras)  # xys: [n_views, n_rays, S * prod(kernel_size), 2]<float32>. mask: [n_rays, n_views, n_samples]<boolean>
+        h, w = src_cameras[0][:2] # scalar, scalar. The height and width of input image
+        norm_xys = self.normalize(xys, h, w)  # [n_views, n_rays, S * prod(kernel_size), 2]
 
         # noise features sampling
-        if self.args.noise_feat:
+        # standard deviation of noise calculated per pixel, per color channel
+        if self.args.noise_feat: # whether to use the noise parameters
             sigma_estimate = sigma_estimate.squeeze(0)  # [n_views, h, w, 3]
             sigma_estimate = sigma_estimate.permute(0, 3, 1, 2)  # [n_views, 3, h, w]
-            sigma_estimate = F.grid_sample(sigma_estimate, norm_xys, align_corners=True)
-            sigma_estimate = sigma_estimate.permute(2, 3, 0, 1)  # [n_rays, n_samples, n_views, 3]
-            sigma_estimate = self.reshape_features(sigma_estimate)
+            sigma_estimate = F.grid_sample(sigma_estimate, norm_xys, align_corners=True) #[n_views, 3, n_rays, S * prod(kernel_size)]
+            sigma_estimate = sigma_estimate.permute(2, 3, 0, 1)  # [n_rays, S * prod(kernel_size), n_views, 3]
+            sigma_estimate = self.reshape_features(sigma_estimate) #[n_rays, S, kernel_size_x, kernel_size_y, n_views, 3]
         else:
             sigma_estimate = None
 
         # rgb sampling
-        rgbs_sampled = F.grid_sample(src_imgs, norm_xys, align_corners=True)
-        rgbs_sampled = rgbs_sampled.permute(2, 3, 0, 1)  # [n_rays, n_samples, n_views, 3]
+        rgbs_sampled = F.grid_sample(src_imgs, norm_xys, align_corners=True) # [n_views, 3, n_rays, S*prod(kernel_size)]
+        rgbs_sampled = rgbs_sampled.permute(2, 3, 0, 1)  # [n_rays, S * prod(kernel_size), n_views, 3]
 
-        org_rgbs_sampled = F.grid_sample(org_src_imgs, norm_xys, align_corners=True)
-        org_rgbs_sampled = org_rgbs_sampled.permute(2, 3, 0, 1)  # [n_rays, n_samples, n_views, 3]
-        org_rgbs_sampled = self.reshape_features(org_rgbs_sampled)
+        org_rgbs_sampled = F.grid_sample(org_src_imgs, norm_xys, align_corners=True) #[n_views, 3, n_rays, S * prod(kernel_size)]
+        org_rgbs_sampled = org_rgbs_sampled.permute(2, 3, 0, 1)  # [n_rays, S * prod(kernel_size), n_views, 3]
+        org_rgbs_sampled = self.reshape_features(org_rgbs_sampled) # [n_rays, S, kernel_size_x, kernel_size_y, n_views, 3]
 
         # deep feature sampling
         feat_sampled = F.grid_sample(featmaps, norm_xys, align_corners=True)
-        feat_sampled = feat_sampled.permute(2, 3, 0, 1)  # [n_rays, n_samples, n_views, d]
-        rgb_feat_sampled = torch.cat([rgbs_sampled, feat_sampled], dim=-1)  # [n_rays, n_samples, n_views, d+3]
-        rgb_feat_sampled = self.reshape_features(rgb_feat_sampled)
+        feat_sampled = feat_sampled.permute(2, 3, 0, 1)  # [n_rays, S * prod(kernel_size), n_views, d] where d=32 is dimension of encoded feature
+        rgb_feat_sampled = torch.cat([rgbs_sampled, feat_sampled], dim=-1)  # [n_rays, S * prod(kernel_size), n_views, d+3]
+        rgb_feat_sampled = self.reshape_features(rgb_feat_sampled) # [n_rays, S, kernel_size_x, kernel_size_y, n_views, d+3]
 
         # ray_diff
-        ray_diff = self.compute_angle(xyz, query_camera, src_cameras)
-        ray_diff = ray_diff.permute(1, 2, 0, 3).unsqueeze(-3).unsqueeze(-3)
+        ray_diff = self.compute_angle(xyz, query_camera, src_cameras) # [n_views, n_rays, S, 4]
+        ray_diff = ray_diff.permute(1, 2, 0, 3).unsqueeze(-3).unsqueeze(-3) # [n_rays, S, 1, 1, n_views, 4]
 
         # mask
         mask = mask.permute(1, 2, 0)[..., None]  # [n_rays, n_samples, n_views, 1]

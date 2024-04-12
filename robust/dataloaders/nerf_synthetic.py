@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import pdb
 import numpy as np
 import imageio
 import torch
@@ -33,11 +34,23 @@ def read_cameras(pose_file):
 
     img = imageio.imread(os.path.join(basedir, meta['frames'][0]['file_path'] + '.png'))
     H, W = img.shape[:2]
-    focal = .5 * W / np.tan(.5 * camera_angle_x)
+    focal = .5 * W / np.tan(.5 * camera_angle_x) #摄像机焦距 0.5*W / tan(广度角/2)
     intrinsics = get_intrinsics_from_hwf(H, W, focal)
-
+    ''' 2024-04-05 The transformation in the following code block (`w2c_blender` -> `w2c_opencv`)
+                   was correct and was proved by visualization 
+    # Here below is the same process from neuralangelo
+    poses = []
+    for frame in meta["frames"]:
+        c2w = torch.tensor(frame["transform_matrix"])
+        c2w[:, 1:3] *= -1
+        w2c = c2w.inverse()
+        pose = w2c[:3]  # [3,4]
+        poses.append(pose)
+    poses = torch.stack(poses, dim=0)
+    print(f"# images: {len(poses)}")
+    '''
     for i, frame in enumerate(meta['frames']):
-        rgb_file = os.path.join(basedir, meta['frames'][i]['file_path'][2:] + '.png')
+        rgb_file = os.path.join(basedir, meta['frames'][i]['file_path'] + '.png')
         rgb_files.append(rgb_file)
         c2w = np.array(frame['transform_matrix'])
         w2c_blender = np.linalg.inv(c2w)
@@ -67,10 +80,12 @@ class NerfSyntheticDataset(NoiseDataset):
         super().__init__(args, mode, scenes=scenes, **kwargs)
 
     def get_all_scenes(self):
-        return [self.folder_path / scene for scene in ('chair', 'drums', 'lego', 'hotdog', 'materials', 'mic', 'ship')]
+        ### 2024-04-05 Temporarily rewrite
+        return [self.folder_path / scene for scene in ('chair', 'lego')]
+        # return [self.folder_path / scene for scene in ('chair', 'drums', 'lego', 'hotdog', 'materials', 'mic', 'ship')]
 
     def add_single_scene(self, _, scene_path):
-        pose_file = os.path.join(scene_path, f'transforms_{self.mode}.json')
+        pose_file = os.path.join(scene_path, f'transforms_train.json')
         rgb_files, intrinsics, poses = read_cameras(pose_file)
         if self.mode != Mode.train:
             rgb_files = rgb_files[::self.testskip]
@@ -87,8 +102,10 @@ class NerfSyntheticDataset(NoiseDataset):
         rgb_file = self.render_rgb_files[idx]
         render_pose = self.render_poses[idx]
         render_intrinsics = self.render_intrinsics[idx]
-
-        train_pose_file = os.path.join('/'.join(rgb_file.split('/')[:-2]), 'transforms_train.json')
+        # For clean dataset
+        # train_pose_file = os.path.join('/'.join(rgb_file.split('/')[:-2]), 'transforms_train.json')
+        # For noise dataset
+        train_pose_file = os.path.join('/'.join(rgb_file.split('/')[:-2]), 'transforms.json')
         train_rgb_files, train_intrinsics, train_poses = read_cameras(train_pose_file)
 
         if self.mode == Mode.train:

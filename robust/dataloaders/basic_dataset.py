@@ -2,6 +2,7 @@ from abc import ABC
 from copy import copy
 from pathlib import Path
 import torch
+import torchvision
 from torch.utils.data import Dataset
 from robust.dataloaders.data_utils import random_crop, random_flip
 from robust.configs.config import DATA_DIR
@@ -9,6 +10,8 @@ import imageio
 import matplotlib.pyplot as plt
 from enum import Enum
 import numpy as np
+import os
+import cv2
 
 
 class Mode(Enum):
@@ -138,41 +141,92 @@ class BurstDataset(Dataset, ABC):
         """
         return np.concatenate((rgb.shape[:2], intrinsics.flatten(), pose.flatten())).astype(np.float32)
 
+class MyNoiseDataset(BurstDataset):
+    def __init__(self, root, transform=None):
+        """
+        PARAM
+        ==========
+        :root {str}. The root folder of colmap output
+        :transform {func}. A callable that performs image transform
+        NOTES
+        ==========
+        Assume the root folder structure like this
+        /(root)
+        |___ images (colmap output)
+        |___ ... (other folders that I don't care)
+        """
+        if os.path.exists(root):
+            self.root = root
+        else:
+            raise Exception(f"The root you specify: {root} does not exist")
+        self.image_path = os.path.join(self.root, "images")
+        self.image_files = []
+        for idx, entry in enumerate(os.scandir(self.image_path)):
+            if entry.name.endswith(".png") or entry.name.endswith(".jpg"):
+                self.image_files.append(os.path.join(self.image_path, entry.name))
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_files)
+    
+    def add_noise(self, images, read_std=0.037, shot_std=0.093):
+        """
+        Add per-channel read and shot noise to each pixel of the images
+
+        INPUT
+        ----------
+        images: Tensor (N, H, W, C) where N is the number of images
+        shot_std: the multiplicative scale for poisson (shot) noise
+        read_std: the standard deviation of Gaussian (read) noise.
+
+        OUTPUT
+        ----------
+        A tensor (N,H,W,C) of noise-added images
+        """
+        result = []
+        if len(images.size()) <= 3:
+            images = images.unsqueeze(0)
+        for n_idx in range(images.size(0)):
+            img = images[n_idx].clone()
+            poisson_noise = shot_std * torch.sqrt(img) * torch.randn(img.size())
+            gaussian_noise = read_std * torch.randn(img.size())
+            img = img.float() + poisson_noise + gaussian_noise
+            img = torch.clamp(img, min=0., max=1.0)
+            result.append(img)
+        return torch.stack(result)
+
+    def __getitem__(self, idx):
+        """
+        RETURN
+        =======
+        a tuple (noisy, clean, imagename) where `imagename` is the basename for the underlying image file
+        """
+        clean_array = cv2.cvtColor(cv2.imread(self.image_files[idx]), cv2.COLOR_BGR2RGB) # (H, W, C)
+        clean_tensor = torchvision.transforms.ToTensor()(clean_array)
+        # noisy_tensor = transforms.ToTensor()(noisy_array)
+        noisy_tensor = self.add_noise(clean_tensor)[0] # (H, W, C)
+        # clean_pil = Image.fromarray(clean_array) # type PIL.Image
+        # noisy_pil = Image.fromarray(noisy_array)  # type PIL.Image
+
+        stacked = torch.cat([ noisy_tensor, clean_tensor], dim=0) # type Tensor
+
+        if self.transform is not None:
+            stacked = self.transform(stacked) 
+
+        return (stacked[:3],
+                stacked[3:],
+                os.path.basename(self.image_files[idx]) )
 
 class NoiseDataset(BurstDataset, ABC):
     def __init__(self, args, mode, **kwargs):
         super().__init__(args, mode, **kwargs)
-        if mode == Mode.train:
-            assert len(self.args.std) == 4
-            self.get_noise_params = self.get_noise_params_train
-        else:
-            if self.args.eval_gain == 0:
-                sig_read, sig_shot = 0, 0
-                print(f"Loading {mode} set without additional noise.")
-            else:
-                # load gain data from KPN paper https://bmild.github.io/kpn/index.html
-                noise_data = np.load(DATA_DIR / 'synthetic_5d_j2_16_noiselevels6_wide_438x202x320x8.npz')
-                sig_read_list = np.unique(noise_data['sig_read'])[2:]
-                sig_shot_list = np.unique(noise_data['sig_shot'])[2:]
+        self.eval_gain = self.args.eval_gain
+        self.sig_read = args.sig_read
+        self.sig_shot = args.sig_shot
 
-                log_sig_read = np.log10(sig_read_list)
-                log_sig_shot = np.log10(sig_shot_list)
+        print(f"Loading {mode} set for gain {self.args.eval_gain}. "  
+                      f"Max std {self.get_std(1, self.sig_read, self.sig_shot)}")
 
-                d_read = np.diff(log_sig_read)[0]
-                d_shot = np.diff(log_sig_shot)[0]
-
-                gain_log = np.log2(self.args.eval_gain)
-
-                sig_read = 10 ** (log_sig_read[0] + d_read * gain_log)
-                sig_shot = 10 ** (log_sig_shot[0] + d_shot * gain_log)
-
-                print(f"Loading {mode} set for gain {self.args.eval_gain}. "  
-                      f"Max std {self.get_std(1, sig_read, sig_shot)}")
-
-            def get_noise_params_test():
-                return sig_read, sig_shot
-
-            self.get_noise_params = get_noise_params_test
         self.depth_range = None
 
     def choose_views(self, possible_views, num_views, target_view):

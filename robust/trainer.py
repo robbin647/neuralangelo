@@ -18,7 +18,7 @@ from robust.dataloaders.basic_dataset import de_linearize, Mode
 from robust.dataloaders.create_training_dataset import create_training_dataset
 from robust.dataloaders.data_utils import cycle
 from robust.utils.loss_utils import L2Loss
-from robust.model import RobustModel
+from robust._model import RobustModel
 from robust.render_image import render_single_image
 from robust.render_ray import RayRender
 from robust.sample_ray import RaySampler

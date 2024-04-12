@@ -16,10 +16,12 @@ from typing import Dict
 import torch
 from collections import OrderedDict
 
-from robust.model import RobustModel # equivalent to class NANScheme in NAN source code
+from robust._model import RobustModel # equivalent to class NANScheme in NAN source code
 from robust.projection import Projector
 from robust.raw2output import RaysOutput
 
+
+import pdb
 
 def sample_pdf(bins, weights, N_samples, det=False):
     """
@@ -80,8 +82,9 @@ class RayRender:
     * Rendering rho and RGB values to each 3D point along a ray
     * Aggregate the values from 3D points along a specific ray
     """
-    def __init__(self, model: RobustModel, args, device, save_pixel=None):
+    def __init__(self, model: RobustModel, neura_model, args, device, save_pixel=None):
         self.model = model
+        self.neura_model = neura_model # neuralangelo model
         self.device = device
         self.projector = Projector(device=device, args=args)
 
@@ -150,6 +153,18 @@ class RayRender:
         return pts, z_vals
 
     def sample_along_ray_fine(self, coarse_out: RaysOutput, z_vals, ray_batch):
+        '''
+        Arguments
+        ---------
+        corase_out: the evaluated rhos and sample weights by applying the coarse net
+        z_vals: the depth of sample points for coarse net
+        ray_batch: a list of rays randomly selected by RaySampler
+
+        Returns
+        --------
+        pts: Points sampled on each ray in the ray_batch. Tensor[N_rays, N_samples + N_importance, 3]
+        z_vals: The depth of sample points, in increasing order, along each ray in ray_batch. Tensor[N_rays, N_samples + N_importance]
+        '''
         # detach since we would like to decouple the coarse and fine networks
         weights = coarse_out.weights.clone().detach()  # [N_rays, N_samples]
 
@@ -214,7 +229,7 @@ class RayRender:
         # Process the rays and return the coarse phase output
         coarse_ray_out = self.process_rays_batch(ray_batch=ray_batch, pts=pts_coarse, z_vals=z_vals_coarse, save_idx=save_idx,
                                          level='coarse', proc_src_rgbs=proc_src_rgbs, featmaps=featmaps,
-                                         org_src_rgbs=org_src_rgbs, sigma_estimate=sigma_estimate)
+                                         org_src_rgbs=org_src_rgbs, sigma_estimate=sigma_estimate, depth_range=ray_batch['depth_range'])
         batch_out['coarse'] = coarse_ray_out
 
         if self.fine_processing:
@@ -232,21 +247,23 @@ class RayRender:
         return batch_out
 
     def process_rays_batch(self, ray_batch, pts, z_vals, save_idx, level, proc_src_rgbs, featmaps,
-                           org_src_rgbs, sigma_estimate):
+                           org_src_rgbs, sigma_estimate, depth_range):
         """
         :param sigma_estimate: (1, N, H, W, 3)
-        :param org_src_rgbs: (1, N, H, W, 3)
-        :param proc_src_rgbs: (1, N, H, W, 3)
+        :param org_src_rgbs: RGB values of the original images, size (1, N, H, W, 3)
+        :param proc_src_rgbs: org_src_rgbs processed by pre_net, size (1, N, H, W, 3)
         :param featmaps: (N, 3, H', W')
         :param level: str {'coarse', 'fine'}
         :param ray_batch: dictionary with rays origin, direction and relevant data for rendering
         :param pts: 3D points along the rays (R, S, 3)
         :param z_vals: z values from which the 3D points were calcuated (R, S)
         :param save_idx: indices for debug purposes
+        :param depth_range: [near_depth, far_depth]
         :return: RaysOutput object of the rendered values
         """
         # Project the pts along the rays batch on all others views (src views)
         # based on the target camera and src cameras (intrinsics - K, rotation - R, translation - t)
+        
         proj_out = self.projector.compute(pts, ray_batch['camera'], proc_src_rgbs, org_src_rgbs, sigma_estimate,
                                           ray_batch['src_cameras'],
                                           featmaps=featmaps[level])  # [N_rays, N_samples, N_views, x]
@@ -254,9 +271,42 @@ class RayRender:
 
         # [N_rays, N_samples, 4]
         # Process the feature vectors of all 3D points along each ray to predict density and rgb value
-        rgb_out, rho_out, *debug_info = self.model.mlps[level](rgb_feat, ray_diff,
-                                                               pts_mask.unsqueeze(-3).unsqueeze(-3),
-                                                               org_rgb, sigma_est)
+        # DEBUG 2024-4-11 
+        # rgb_out, rho_out, *debug_info = self.model.mlps[level](rgb_feat, ray_diff,
+        #                                                       pts_mask.unsqueeze(-3).unsqueeze(-3),
+        #                                                       org_rgb, sigma_est) 
+        robust_forward_input = {
+            "rgb_feat": rgb_feat,
+            "mask": pts_mask.unsqueeze(-3).unsqueeze(-3),
+            "ray_diff": ray_diff,
+            "sigma_estimate": sigma_est,
+            "rgb_in": org_rgb, 
+        }
+        
+        sdf_val, sdf_vec, rgb_out = self.model(robust_forward_input)
+        # sdf_val [512, 64, 1, 1], sdf_vec [512, 64, 1, 256], rgb_out [512, 64, 3]
+        
+        
+        # 复制neuralangelo的体渲染
+        from projects.nerf.utils import render
+        center = ray_batch['ray_o'].unsqueeze(0) # (B=1, R, 3)
+        ray_unit = ray_batch['ray_d'].unsqueeze(0) # (B=1, R, 3)
+        near_depth_value = ray_batch['depth_range'][0, 0] # scalar(device=cuda)
+        far_depth_value = ray_batch['depth_range'][0, 1] # scalar(device=cuda)
+        assert 0 < near_depth_value < far_depth_value and far_depth_value > 0
+        
+        far_vec = far_depth_value * torch.ones(*ray_unit.shape[:-1],1, 1).to(far_depth_value.device) #  [B, R, 1, 1]
+
+        sdf_val = sdf_val.squeeze(-2).unsqueeze(0) # [1, 512, 64, 1]
+        gradients, _ = self.neura_model.neural_sdf.compute_gradients(pts.unsqueeze(0), training=True, sdf=sdf_val) # [B=1,R=512,S=64,3]
+        
+        alphas = self.neura_model.compute_neus_alphas(ray_unit, sdf_val, gradients, dists=z_vals.unsqueeze(0)[...,None], dist_far=far_vec)# [B=1,R,S]
+        vol_render_weights = render.alpha_compositing_weights(alphas) # [B, R, S, 1]
+        rgb = render.composite(rgb_out.unsqueeze(0), vol_render_weights) # [B=1, R=512, 3]
+        
+        # TODO: 改写接下去的loss
+        
+        '''
         ray_outputs = RaysOutput.raw2output(rgb_out, rho_out, z_vals, pts_mask, white_bkgd=self.white_bkgd)
 
         if save_idx is not None:
@@ -270,6 +320,7 @@ class RayRender:
             ray_outputs.debug = debug_dict
 
         return ray_outputs
+        '''
 
     def calc_featmaps(self, src_rgbs):
         """

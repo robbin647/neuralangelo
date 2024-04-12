@@ -18,10 +18,11 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pdb
 
 from robust.utils.general_utils import TINY_NUMBER
 from robust.attention import MultiHeadAttention
+from robust.networks.ray_transformer import RayTransformer
+import pdb
 
 torch._C._jit_set_profiling_executor(False)
 torch._C._jit_set_profiling_mode(False)
@@ -83,7 +84,7 @@ class NanMLP(nn.Module):
                                         nn.Linear(16, in_feat_ch + 3),
                                         self.activation_func)
 
-        base_input_channels = (in_feat_ch + 3) * 3
+        base_input_channels = (in_feat_ch + 3) * 3 # (32+3) * 3
         if self.args.noise_feat:
             base_input_channels += 3
 
@@ -93,9 +94,12 @@ class NanMLP(nn.Module):
                                      self.activation_func)
 
         if args.views_attn:
-            input_channel = 35
+            input_channel = 35 # the dimension of feature emdedding(32) and RGB values(3)
             self.views_attention = MultiHeadAttention(5, input_channel, 7, 8)
             # self.spatial_views_attention = MultiHeadAttention(5, input_channel, 7, 8)
+        ##### DEBUG 2024-04-11 ADD CODE####        
+        self.ray_transformer = RayTransformer()
+        #### END DEBUG ####
         self.vis_fc = nn.Sequential(nn.Linear(32, 32),
                                     self.activation_func,
                                     nn.Linear(32, 33),
@@ -124,13 +128,13 @@ class NanMLP(nn.Module):
         self.rgb_reduce_fn = self.rgb_reduce_factory()
 
         # positional encoding
-        self.pos_enc_d = 16
+        self.pos_enc_d = 36
         self.pos_encoding = self.pos_enc_generator(n_samples=self.n_samples, d=self.pos_enc_d)
 
         self.apply(weights_init)
 
     def rgb_fc_factory(self):
-        kernel_numel = prod(self.args.kernel_size) # 9
+        kernel_numel = prod(self.args.kernel_size)
         if kernel_numel == 1:
             rgb_fc = nn.Sequential(nn.Linear(32 + 1 + 4, 16),
                                    self.activation_func,
@@ -139,19 +143,19 @@ class NanMLP(nn.Module):
                                    nn.Linear(8, 1))
 
         else:
-            rgb_out_channels = kernel_numel # 9
-            rgb_pre_out_channels = kernel_numel # 9
+            rgb_out_channels = kernel_numel
+            rgb_pre_out_channels = kernel_numel
             if self.args.rgb_weights:
-                rgb_out_channels *= 3  # 27
-                rgb_pre_out_channels *= 3 # 27
+                rgb_out_channels *= 3
+                rgb_pre_out_channels *= 3
             if rgb_pre_out_channels < 16:
                 rgb_pre_out_channels = 16
 
-            rgb_fc = nn.Sequential(nn.Linear(32 + 1 + 4, rgb_pre_out_channels), # (37) --> (27)
+            rgb_fc = nn.Sequential(nn.Linear(32 + 1 + 4, rgb_pre_out_channels),
                                    self.activation_func,
-                                   nn.Linear(rgb_pre_out_channels, rgb_out_channels), # (27) --> (27)
+                                   nn.Linear(rgb_pre_out_channels, rgb_out_channels),
                                    self.activation_func,
-                                   nn.Linear(rgb_out_channels, rgb_out_channels)) # (27) --> (27)
+                                   nn.Linear(rgb_out_channels, rgb_out_channels))
 
         return rgb_fc
 
@@ -164,76 +168,64 @@ class NanMLP(nn.Module):
         sinusoid_table[..., 1::2] = torch.cos(sinusoid_table[..., 1::2])  # dim 2i+1
 
         return sinusoid_table
+    
 
-    def forward(self, rgb_feat, ray_diff, mask, rgb_in, sigma_est):
+    def forward(self, rgb_feat, ray_diff, mask, rgb_in, sigma_est, pts):
         """
+        R - number of rays;
+        S - number of samples;
+        N - number of views;
+        F - dimension of RGB+encoded features
         :param rgb_feat: rgbs and image features [R, S, k, k, N, F]
         :param ray_diff: ray direction difference [R, S, 1, 1, N, 4], first 3 channels are directions, last channel is inner product
         :param mask: [R, S, 1, 1, N, 1]
         :param rgb_in:  # [R, S, k, k, N, 3]
-        :param sigma_est: [R, S, k, k, N, 3] standard deviation of noise calculated per pixel, per color channel
+        :param sigma_est: [R, S, k, k, N, 3]
+        :param pts: 3D points along the rays (R, S, 3)
         :return: rgb [R, S, 3], density [R, S, 1], rgb weights [R, S, k, k, N, 3].
                  For debug: rgb_in and features at the beggining of rho calculation [R, S, F*2+1]
         """
 
         # [n_rays, n_samples, 1, 1, 1]
-        num_valid_obs = mask.sum(dim=-2) 
-        
-        pdb.set_trace()
+        num_valid_obs = mask.sum(dim=-2) #[512, 64, 1, 1, 1]
+        #### DEBUG 2024-04-11 ####
         # ext_feat, weight = self.compute_extended_features(ray_diff, rgb_feat, mask, num_valid_obs, sigma_est)
-        direction_feat = self.ray_dir_fc(ray_diff) #[nn.Linear(4, 16), nn.Linear(16,35)]
-        # direction_feat [R, S, 1, 1, N, 35]
-        rgb_feat = rgb_feat[:,:,self.k_mid:self.k_mid+1,
-                            self.k_mid:self.k_mid+1] + direction_feat 
-        # rgb_feat [R, S, 1, 1, N, 35]
-        if self.args.views_attn:
-            r, s, k, _, v, f = rgb_feat.shape
-            _mask = (num_valid_obs > 1).unsqueeze(-1) # [n_rays, n_samples, n_views, 1, 3*n_feat]
-            feat, _ = self.views_attention(rgb_feat, rgb_feat, rgb_feat, mask=_mask) # [R, S, 1, 1, N, 35]
-        if self.args.noise_feat:
-            feat = torch.cat([rgb_feat, 
-                              sigma_est[:, :, self.k_mid:self.k_mid+1, self.k_mid:self.k_mid+1]], # [R, S, 1, 1, N, 3]
-                              dim=-1)
-            # feat:[R,S,1,1,N,38]
-        weight = self.compute_weights(ray_diff, mask) # [512, 64, 1, 1, 8, 1]
-        # compute mean and variance across different views for each point
-        mean, var = fused_mean_variance(rgb_feat, weight)  # [n_rays, n_samples, 1, 1, 1, 35]  
-        globalfeat = torch.cat([mean, var], dim=-1) # [n_rays, n_samples, 1, 1, 1, 70]
-        globalfeat = globalfeat.expand(*rgb_feat.shape[:-1], globalfeat.shape[-1]) # [R,S,1,1,N,70]
-        ext_feat = torch.cat([globalfeat, feat], dim=-1) # [R,S,1,1,N,108]
+        ext_feat, weight = self.compute_extended_features(ray_diff, rgb_feat, mask, num_valid_obs, sigma_est, pts) 
+        # TODO ext_feat is [R, S, k, k, N, 257] How to make it [R, S, 257]? (A 257x1 vector for each sample point on each ray)
+        ##### END DEBUG #####
 
-        ###TODO Find which is sigma mlp and color mlp
-        x = self.base_fc(ext_feat)  # Linear((32 + 3) x 3 + 3) --> (64) Linear (64) --> (32)
-        # x [512, 64, 1, 1, 8, 32]
-        x_vis = self.vis_fc(x * weight) # Linear(32 -> 32), Linear(32->33)
-        # x_vis [512, 64, 1, 1, 8, 33]
+        x = self.base_fc(ext_feat)  # ((32 + 3) x 3) --> MLP --> (32)
+        x_vis = self.vis_fc(x * weight)
         x_res, vis = torch.split(x_vis, [x_vis.shape[-1] - 1, 1], dim=-1)
-        # x_res [512, 64, 1, 1, 8, 32], vis [512, 64, 1, 1, 8, 1]
         vis = torch.sigmoid(vis) * mask
-        # [512, 64, 1, 1, 8, 1]
         x = x + x_res
-        # x [512, 64, 1, 1, 8, 32]
-        vis = self.vis_fc2(x * vis) * mask # Linear(32->32), Linear(32->1)
-        # vis [512, 64, 1, 1, 8, 1]
+        vis = self.vis_fc2(x * vis) * mask
 
-        rho_out, rho_globalfeat = self.compute_rho(x[:, :, 0, 0], vis[:, :, 0, 0], num_valid_obs[:, :, 0, 0]) # compute_rho arguments: [R, S, 8, 32], [512, 64, 8, 1], [512, 64, 1]
-        # rho_out [512, 64, 1], rho_globalfeat [512, 64, 65]
+        rho_out, rho_globalfeat = self.compute_rho(x[:, :, 0, 0], vis[:, :, 0, 0], num_valid_obs[:, :, 0, 0])
         x = torch.cat([x, vis, ray_diff], dim=-1)
-        # x [512, 64, 1, 1, 8, 37]
         rgb_out, w_rgb = self.compute_rgb(x, mask, rgb_in)
-        # rgb_out [512, 64, 3], w_rgb [512, 64, 3, 3, 8, 3]
         return rgb_out, rho_out, w_rgb, rgb_in, rho_globalfeat
 
-    def compute_extended_features(self, ray_diff, rgb_feat, mask, num_valid_obs, sigma_est):
-        direction_feat = self.ray_dir_fc(ray_diff)  # [n_rays, n_samples, k, k, n_views, 35]
-        rgb_feat = rgb_feat[:, :, self.k_mid:self.k_mid + 1,
-                   self.k_mid:self.k_mid + 1] + direction_feat  # [n_rays, n_samples, 1, 1, n_views, 35]
-        feat = rgb_feat
+    def compute_extended_features(self, ray_diff, rgb_feat, mask, num_valid_obs, sigma_est, pts):
+        """
+        :param ray_diff [512, S, 1, 1, n_view, 4]
+        :param rgb_feat [512, S, k, k, n_view, f'+3]
+        :param mask [512, 64, 1, 1, 8, 1]
+        :param sigma_est [512, 64, 3, 3, 8, 3]
+        :param num_valid_obs [[512, 64, 1, 1, 1]
+        :param pts: 3D points along the rays (R, S, 3)
+        """
+        direction_feat = self.ray_dir_fc(ray_diff)  # [n_rays, n_samples, 1, 1, n_views, 35]
+        rgb_feat = rgb_feat[:, :, self.k_mid:self.k_mid + 1, 
+                            self.k_mid:self.k_mid + 1] + direction_feat  # both are [n_rays, n_samples, 1, 1, n_views, 35]
+        feat = rgb_feat # torch.Size([512, 64, 1, 1, 8, 35])
 
+        pdb.set_trace()
+        """ DEBUG 04-10 UNCOMMENT TO RESTORE
         if self.args.views_attn:
-            r, s, k, _, v, f = feat.shape
-            feat, _ = self.views_attention(feat, feat, feat, (num_valid_obs > 1).unsqueeze(-1))
-
+            r, s, k, _, v, f = feat.shape # [R, S, k, k, N, 3(RGB)+F(embedding)]
+            feat, _ = self.views_attention(feat, feat, feat, (num_valid_obs > 1).unsqueeze(-1)) # [R, S, k, k, N, 35]
+            
         if self.args.noise_feat:
             feat = torch.cat([feat, sigma_est[:, :, self.k_mid:self.k_mid + 1, self.k_mid:self.k_mid + 1]], dim=-1)
 
@@ -245,6 +237,18 @@ class NanMLP(nn.Module):
         globalfeat = globalfeat.expand(*rgb_feat.shape[:-1], globalfeat.shape[-1])
 
         ext_feat = torch.cat([globalfeat, feat], dim=-1)
+        """
+        
+        self.ray_transformer.num_valid_obs = (num_valid_obs > 1).unsqueeze(-1)
+        self.ray_transformer.gamma_x = self.pos_encoding # [n_samples, 36]
+        # TODO: find the best initial value for `tgt` in RayTransformer::forward
+        
+        
+        rgb_feat = rgb_feat.permute(0, 1, 4, 2, 3, 5) # [512, 64, 8, 1, 1, 35]
+        R, S, n_view,_,_, n_feat = rgb_feat.size()
+        rgb_feat = rgb_feat.view(R, S, n_view, -1, n_feat) # combine k, k into k*k # [512, 64, 8, 1, 35]
+        ext_feat = self.ray_transformer(rgb_feat) 
+        weight = weight = self.compute_weights(ray_diff, mask)
         return ext_feat, weight
 
     def compute_weights(self, ray_diff, mask):
@@ -278,10 +282,8 @@ class NanMLP(nn.Module):
         return rho_out, rho_globalfeat
 
     def compute_rgb(self, x, mask, rgb_in):
-        x = self.rgb_fc(x) # [512, 64, 1, 1, 8, 27]  Linear (37) --> (27) --> (27) --> (27)
-        # x [[512, 64, 1, 1, 8, 27]] mask [[512, 64, 1, 1, 8, 1]], rgb_in [512, 64, 3, 3, 8, 3]
+        x = self.rgb_fc(x)
         rgb_out, blending_weights_rgb = self.rgb_reduce_fn(x, mask, rgb_in)
-        # rgb_out [512, 64, 3], blending_weights_rgb [512, 64, 3, 3, 8, 3]
         return rgb_out, blending_weights_rgb
 
     def rgb_reduce_factory(self):
@@ -300,18 +302,9 @@ class NanMLP(nn.Module):
 
     @staticmethod
     def expanded_rgb_weighted_rgb_fn(x, mask, rgb_in):
-        """
-        x [512, 64, 1, 1, 8, 27] 
-        mask [512, 64, 1, 1, 8, 1], 
-        rgb_in [512, 64, 3, 3, 8, 3]
-        """
         R, S, k, _, V, C = rgb_in.shape
-        # masked_fill: Fills elements of self tensor with value where mask is True.
-        # squeeze()把所有为1的dim干掉
-        w = x.masked_fill((~mask), -1e9).squeeze().view((R, S, V, k, k, C)) # [512, 64, 8, 3, 3, 3]
-        w = w.permute((0, 1, 3, 4, 2, 5)) # [512, 64, 3, 3, 8, 3]
-        # masked_fill作用是把令mask为False的x最后一维填充负无穷 (这样softmax后会变成接近0)
-        blending_weights_valid = softmax3d(w, dim=(2, 3, 4))  # 把w的第2,3,4维合并起来做softmax
-        # blending_weights_valid [512, 64, 3, 3, 8, 3]
+        w = x.masked_fill((~mask), -1e9).squeeze().view((R, S, V, k, k, C))
+        w = w.permute((0, 1, 3, 4, 2, 5))
+        blending_weights_valid = softmax3d(w, dim=(2, 3, 4))  # color blending
         rgb_out = torch.sum(rgb_in * blending_weights_valid, dim=(2, 3, 4))
-        return rgb_out, blending_weights_valid # [512, 64, 3], [512, 64, 3, 3, 8, 3]
+        return rgb_out, blending_weights_valid

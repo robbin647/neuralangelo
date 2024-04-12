@@ -36,10 +36,10 @@ CONFIG_EVAL_DICT = {}
 CONFIG_EVAL_DICT[PC_NAME] = 'eval.yml'
 
 ## Global Constants
-ROOT_DIR     = Path('/root/autodl-tmp/data/neuralangelo_log/dtu/test_stub')
+ROOT_DIR     = Path('/root/autodl-tmp/data/neuralangelo_log/test_stub')
 OUT_DIR      = ROOT_DIR / 'out'
 LOG_DIR      = ROOT_DIR / 'logs'
-DATA_DIR     = ROOT_DIR.parent / 'data'
+DATA_DIR     = Path('/root/autodl-tmp/data')
 FIG_DIR      = ROOT_DIR / 'figures'
 
 FIG_DIR.mkdir(exist_ok=True)
