@@ -52,6 +52,10 @@ def generate_config(args):
         raise TypeError("Unknown scene type")
     # data config
     cfg.data.type = "projects.neuralangelo.data"
+    ### Switch to robust.trainer and robust.model on `use_robust` flag
+    if args.use_robust:
+        cfg.trainer.type = "robust.trainer"
+        cfg.model.type = "robust.model"
     cfg.data.root = args.data_dir
     img = Image.open(os.path.join(args.data_dir, args.src_image_folder, os.listdir(os.path.join(args.data_dir, args.src_image_folder))[0]))
     w, h = img.size
@@ -81,5 +85,6 @@ if __name__ == "__main__":
                         help="Set the short side of validation images (for saving compute when rendering val images)")
     parser.add_argument('--src_image_folder', type=str, default="images",
                         help="Path to folder of source images to be used in training and validation. Defaulted to \"images\" as COLMAP output.")
+    parser.add_argument('--use-robust', action="store_true", default=False, help="if specified, will use robust.trainer as Trainer and robust.model as Model")
     args = parser.parse_args()
     generate_config(args)

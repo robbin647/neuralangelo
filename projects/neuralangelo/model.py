@@ -19,7 +19,7 @@ from imaginaire.models.base import Model as BaseModel
 from projects.nerf.utils import nerf_util, camera, render
 from projects.neuralangelo.utils import misc
 from projects.neuralangelo.utils.modules import NeuralSDF, NeuralRGB, BackgroundNeRF
-
+import pdb
 
 class Model(BaseModel):
 
@@ -48,6 +48,7 @@ class Model(BaseModel):
         if cfg_model.appear_embed.enabled:
             assert cfg_data.num_images is not None
             self.appear_embed = torch.nn.Embedding(cfg_data.num_images, cfg_model.appear_embed.dim)
+            # self.appear_embed is a dictionary of `num_images` `dim`-by-1 vectors. These vectors are indexed by integers from [0, `num_images`-1]
             if cfg_model.background.enabled:
                 self.appear_embed_outside = torch.nn.Embedding(cfg_data.num_images, cfg_model.appear_embed.dim)
             else:
@@ -100,7 +101,7 @@ class Model(BaseModel):
         output = defaultdict(list)
         for center, ray, _ in self.ray_generator(pose, intr, image_size, full_image=True):
             ray_unit = torch_F.normalize(ray, dim=-1)  # [B,R,3]
-            output_batch = self.render_rays(center, ray_unit, sample_idx=sample_idx, stratified=stratified)
+            output_batch = self.render_rays(center, ray_unit, sample_idx=sample_idx, stratified=stratified, is_inference=True)
             if not self.training:
                 dist = render.composite(output_batch["dists"], output_batch["weights"])  # [B,R,1]
                 depth = dist / ray.norm(dim=-1, keepdim=True)
@@ -121,14 +122,26 @@ class Model(BaseModel):
         output = self.render_rays(center, ray_unit, sample_idx=sample_idx, stratified=stratified)
         return output
 
-    def render_rays(self, center, ray_unit, sample_idx=None, stratified=False):
+    def render_rays(self, center, ray_unit, sample_idx=None, stratified=False, is_inference=False):
+        """
+        INPUT
+        ========
+        center: [B=2, R=512, 3]
+        ray_unit: [B=2, R=512, 3]
+        sample_idx: [B=2] 
+        stratified: False
+        """
         with torch.no_grad():
             near, far, outside = self.get_dist_bounds(center, ray_unit)
-        app, app_outside = self.get_appearance_embedding(sample_idx, ray_unit.shape[1])
+        # near [B, R, 1], far [B, R, 1], outside [B, R, 1]<boolean>
+        # appearance embedding ? 
+        app, app_outside = self.get_appearance_embedding(sample_idx, ray_unit.shape[1]) # [B,R,N,C], [B,R,N,C]
+        # app=None, app_outside=None
         output_object = self.render_rays_object(center, ray_unit, near, far, outside, app, stratified=stratified)
         if self.with_background:
             output_background = self.render_rays_background(center, ray_unit, far, app_outside, stratified=stratified)
             # Concatenate object and background samples.
+            # output_background["rgbs"]: [B, R, Nb=32, 3]
             rgbs = torch.cat([output_object["rgbs"], output_background["rgbs"]], dim=2)  # [B,R,No+Nb,3]
             dists = torch.cat([output_object["dists"], output_background["dists"]], dim=2)  # [B,R,No+Nb,1]
             alphas = torch.cat([output_object["alphas"], output_background["alphas"]], dim=2)  # [B,R,No+Nb]
@@ -136,9 +149,9 @@ class Model(BaseModel):
             rgbs = output_object["rgbs"]  # [B,R,No,3]
             dists = output_object["dists"]  # [B,R,No,1]
             alphas = output_object["alphas"]  # [B,R,No]
-        weights = render.alpha_compositing_weights(alphas)  # [B,R,No+Nb,1]
+        weights = render.alpha_compositing_weights(alphas)  # [B,R,No+Nb=160,1]
         # Compute weights and composite samples.
-        rgb = render.composite(rgbs, weights)  # [B,R,3]
+        rgb = render.composite(rgbs, weights)  # [B,R,3] <=== Volume Rendering!!
         if self.white_background:
             opacity_all = render.composite(1., weights)  # [B,R,1]
             rgb = rgb + (1 - opacity_all)
@@ -155,17 +168,19 @@ class Model(BaseModel):
         )
         return output
 
-    def render_rays_object(self, center, ray_unit, near, far, outside, app, stratified=False):
+    def render_rays_object(self, center, ray_unit, near, far, outside, app, stratified=False): # app=None (appearance embedding)
         with torch.no_grad():
-            dists = self.sample_dists_all(center, ray_unit, near, far, stratified=stratified)  # [B,R,N,3]
+            dists = self.sample_dists_all(center, ray_unit, near, far, stratified=stratified)  # [B, R, N=128, 1]
+        # dists [B, R, N=128, 1]
         points = camera.get_3D_points_from_dist(center, ray_unit, dists)  # [B,R,N,3]
-        sdfs, feats = self.neural_sdf.forward(points)  # [B,R,N,1],[B,R,N,K]
-        sdfs[outside[..., None].expand_as(sdfs)] = self.outside_val
+        sdfs, feats = self.neural_sdf.forward(points)  # [B,R,N,1],[B,R,N,K=256]
+        # outside [B=2, R=512, 1]<boolean>
+        sdfs[outside[..., None].expand_as(sdfs)] = self.outside_val # [B, R, N, 1]
         # Compute 1st- and 2nd-order gradients.
         rays_unit = ray_unit[..., None, :].expand_as(points).contiguous()  # [B,R,N,3]
-        gradients, hessians = self.neural_sdf.compute_gradients(points, training=self.training, sdf=sdfs)
+        gradients, hessians = self.neural_sdf.compute_gradients(points, training=self.training, sdf=sdfs) #[B, R, N, 3], None
         normals = torch_F.normalize(gradients, dim=-1)  # [B,R,N,3]
-        rgbs = self.neural_rgb.forward(points, normals, rays_unit, feats, app=app)  # [B,R,N,3]
+        rgbs = self.neural_rgb.forward(points, normals, rays_unit, feats, app=app)  # [B,R,N,3] app=None (appearance embedding)
         # SDF volume rendering.
         alphas = self.compute_neus_alphas(ray_unit, sdfs, gradients, dists, dist_far=far[..., None],
                                           progress=self.progress)  # [B,R,N]
@@ -217,6 +232,7 @@ class Model(BaseModel):
             # Object appearance embedding.
             num_samples_all = self.cfg_render.num_samples.coarse + \
                 self.cfg_render.num_samples.fine * self.cfg_render.num_sample_hierarchy
+            #appear_embed is a dictionary of `num_images` `dim`-by-1 vectors. These vectors are indexed by integers from [0, `num_images`-1]
             app = self.appear_embed(sample_idx)[:, None, None]  # [B,1,1,C]
             app = app.expand(-1, num_rays, num_samples_all, -1)  # [B,R,N,C]
             # Background appearance embedding.
@@ -273,6 +289,16 @@ class Model(BaseModel):
         return dists
 
     def compute_neus_alphas(self, ray_unit, sdfs, gradients, dists, dist_far=None, progress=1., eps=1e-5):
+        """
+        INPUT 
+        ray_unit [B, R, 3]
+        sdfs [B, R, N, 1]
+        gradients [B, R, N, 3]
+        dists [B, R, N, 1]
+        dist_far [B, R, 1, 1]
+        progress = 0.0
+        eps=1e-5
+        """
         sdfs = sdfs[..., 0]  # [B,R,N]
         # SDF volume rendering in NeuS.
         inv_s = self.s_var.exp()

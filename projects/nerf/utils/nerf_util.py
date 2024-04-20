@@ -139,7 +139,8 @@ def positional_encoding(input, num_freq_bases):
     Returns:
         input_enc (tensor [bs, ..., 2*N*num_freq_bases]): Positional codes for input.
     """
-    freq = 2 ** torch.arange(num_freq_bases, dtype=torch.float32, device=input.device) * np.pi  # [L].
+    freq = 2 ** torch.arange(num_freq_bases, dtype=torch.float32, device=input.device) * np.pi  # [L=num_freq_bases].
+    # freq = torch.tensor([2^0*PI, 2^1*PI, ..., 2^(L-1)*PI])
     spectrum = input[..., None] * freq  # [B,...,N,L].
     sin, cos = spectrum.sin(), spectrum.cos()  # [B,...,N,L].
     input_enc = torch.stack([sin, cos], dim=-2)  # [B,...,N,2,L].

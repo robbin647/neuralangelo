@@ -61,6 +61,7 @@ class Dataset(base.Dataset):
         sample = dict(idx=idx)
         # Get the images.
         image, image_size_raw = self.images[idx] if self.preload else self.get_image(idx)
+        # resize image to self.W, self.H
         image = self.preprocess_image(image)
         # Get the cameras (intrinsics and pose).
         intr, pose = self.cameras[idx] if self.preload else self.get_camera(idx)

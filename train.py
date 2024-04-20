@@ -94,7 +94,8 @@ def main():
                   trainer.train_data_loader,
                   single_gpu=args.single_gpu,
                   profile=args.profile,
-                  show_pbar=args.show_pbar)
+                  show_pbar=False)
+                #   show_pbar=args.show_pbar)
 
     # Finalize training.
     trainer.finalize(cfg)

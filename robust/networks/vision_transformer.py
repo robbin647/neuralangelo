@@ -2,15 +2,67 @@
 import torch.nn as nn
 from typing import Dict
 import sys
+import math
 sys.path.insert(0, '/root/autodl-tmp/code/neuralangelo')
 from robust.attention import MultiHeadAttention
 from robust.configs.dotdict_class import DotDict
+
+class RTMLP(nn.Module): # MLP specifically defined for ray transformer
+    def __init__(self, config):
+        super().__init__()
+        self.kernel_size = config.kernel_size 
+        self.attn_embedding_reshape_dim = math.prod(config.kernel_size)*config.embedding_size
+        self.fc1 = nn.Linear(self.attn_embedding_reshape_dim, config.final_out_size)
+        self.activ_fn = nn.functional.gelu
+        self.dropout = nn.Dropout(config.dropout_rate)
+
+        self._init_weights()
+    
+    def _init_weights(self):
+        nn.init.xavier_uniform_(self.fc1.weight)
+        nn.init.normal_(self.fc1.bias, std=1e-6)
+    
+    def forward(self, x):
+        x = x.reshape(*x.shape[:3], -1, self.attn_embedding_reshape_dim) # [B, R, S, N_SRC, k*k*3]
+        x = self.fc1(x)
+        x = self.activ_fn(x)
+        x = self.dropout(x)
+        x = x.reshape(*x.shape[:3], -1) # [B, R, S, 256]
+        return x
+
+class RTBlock(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.embedding_size = config.embedding_size
+        self.n_head = config.n_head
+        assert self.embedding_size % self.n_head == 0, "Embedding size should be divisable by number of heads"
+        self.model_k_size = self.embedding_size // self.n_head
+        self.msa_layer = MultiHeadAttention(n_head=self.n_head, 
+                                            d_model=config.embedding_size, 
+                                            d_k=self.model_k_size, 
+                                            d_v=config.model_v_size)
+        # layer norm before self-attention
+        self.ln_before = nn.LayerNorm(self.embedding_size, eps=1e-6)
+        # layer norm after self-attention
+        self.ln_after = nn.LayerNorm(self.embedding_size, eps=1e-6)
+        # the final MLP layer
+        self.mlp = RTMLP(config) 
+    
+    def forward(self, x, mask=None):
+        x_1 = x
+        x = self.ln_before(x)
+        x, weights = self.msa_layer(x, x, x, mask) # [B,R,S,N_SRC*k*k,3]
+        x = x + x_1
+        x = self.ln_after(x)
+        x = self.mlp(x) # [B,R,S,256]
+        return x, weights
+
 
 class ViTMLP(nn.Module):
     def __init__(self, config):
         super(ViTMLP, self).__init__()
         self.fc1 = nn.Linear(config.embedding_size, config.mlp_dim)
-        self.fc2 = nn.Linear(config.mlp_dim, config.embedding_size)
+        self.fc2 = nn.Linear(config.mlp_dim, config.final_out_size)
         self.activ_fn = nn.functional.gelu
         self.dropout = nn.Dropout(config.dropout_rate)
 
@@ -29,6 +81,7 @@ class ViTMLP(nn.Module):
         x = self.fc2(x)
         x = self.dropout(x)
         return x
+
 
 class ViTBlock(nn.Module):
     def __init__(self, config):
@@ -68,7 +121,10 @@ class ViTModel(nn.Module):
     def __init__(self, config: Dict) -> None:
         super(ViTModel, self).__init__()
         self.config = config
-        self.encoder = ViTBlock(config)
+        if config.mlp_type == "ViTMLP":
+            self.encoder = ViTBlock(config)
+        else:
+            self.encoder = RTBlock(config)
         self.encoder_mask = None # TODO
     
     def forward(self, x):
@@ -85,10 +141,13 @@ if __name__ == '__main__':
         "num_encoder_block": 1,
         "n_head": 5,    
         "embedding_size": 35,
+        "final_out_size": 35, # controls the output size at the end of the last MLP 
+        "kernel_size": [3, 3], # (optional) only when using RTMLP, the kernel size in feature extraction step
         "model_k_size": 7,
         "model_v_size": 7,
         "mlp_dim": 256, #  dimension of the intermediate output between last two linear layers 
-        "dropout_rate": 0.1
+        "dropout_rate": 0.1,
+        "mlp_type": "RTMLP" # possible values: "RTMLP", "ViTMLP"
     })
 
     oneViT = ViTModel(ViTConfig)

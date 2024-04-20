@@ -217,7 +217,7 @@ class NeuralRGB(torch.nn.Module):
             input_list.remove(view_enc)
         if self.cfg_rgb.mode == "no_normal":
             input_list.remove(normals)
-        input_vec = torch.cat(input_list, dim=-1)
+        input_vec = torch.cat(input_list, dim=-1) # 最大[B, R, S, 280] where 256+3+3+2*cfg_rgb.encoding_view.levels=3
         rgb = self.mlp(input_vec).sigmoid_()
         return rgb  # [...,3]
 
