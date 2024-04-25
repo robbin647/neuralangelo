@@ -1,0 +1,183 @@
+checkpoint:
+    save_epoch: 9999999999
+    save_iter: 10000
+    save_latest_iter: 9999999999
+    save_period: 9999999999
+    strict_resume: true
+cudnn:
+    benchmark: true
+    deterministic: false
+data:
+    name: dummy
+    num_images: null
+    num_workers: 4
+    preload: true
+    readjust:
+        center:
+        - -0.2
+        - -0.2
+        - 0.2
+        scale: 0.6
+    root: /root/autodl-tmp/data/nerf_synthetic/chair
+    train:
+        batch_size: 2
+        image_size:
+        - 808
+        - 808
+        subset: null
+    type: projects.neuralangelo.data
+    use_multi_epoch_loader: true
+    val:
+        batch_size: 2
+        image_size:
+        - 300
+        - 300
+        max_viz_samples: 16
+        subset: 4
+image_save_iter: 9999999999
+inference_args: {}
+local_rank: 0
+logdir: /root/autodl-tmp/data/neuralangelo_log/synthetic_chair
+logging_iter: 9999999999999
+max_epoch: 9999999999
+max_iter: 20000
+metrics_epoch: null
+metrics_iter: null
+model:
+    appear_embed:
+        dim: 8
+        enabled: false
+    background:
+        enabled: true
+        encoding:
+            levels: 10
+            type: fourier
+        encoding_view:
+            levels: 3
+            type: spherical
+        mlp:
+            activ: relu
+            activ_density: softplus
+            activ_density_params: {}
+            activ_params: {}
+            hidden_dim: 256
+            hidden_dim_rgb: 128
+            num_layers: 8
+            num_layers_rgb: 2
+            skip:
+            - 4
+            skip_rgb: []
+        view_dep: true
+        white: false
+    object:
+        rgb:
+            encoding_view:
+                levels: 3
+                type: spherical
+            mlp:
+                activ: relu_
+                activ_params: {}
+                hidden_dim: 256
+                num_layers: 4
+                skip: []
+                weight_norm: true
+            mode: idr
+        s_var:
+            anneal_end: 0.1
+            init_val: 3.0
+        sdf:
+            encoding:
+                coarse2fine:
+                    enabled: true
+                    init_active_level: 4
+                    step: 200
+                hashgrid:
+                    dict_size: 19
+                    dim: 8
+                    max_logres: 11
+                    min_logres: 5
+                    range:
+                    - -2
+                    - 2
+                levels: 16
+                type: hashgrid
+            gradient:
+                mode: numerical
+                taps: 4
+            mlp:
+                activ: softplus
+                activ_params:
+                    beta: 100
+                geometric_init: true
+                hidden_dim: 256
+                inside_out: false
+                num_layers: 1
+                out_bias: 0.5
+                skip: []
+                weight_norm: true
+    render:
+        num_sample_hierarchy: 4
+        num_samples:
+            background: 32
+            coarse: 64
+            fine: 16
+        rand_rays: 512
+        stratified: true
+    type: projects.neuralangelo.model
+nvtx_profile: false
+optim:
+    fused_opt: false
+    params:
+        lr: 0.001
+        weight_decay: 0.01
+    sched:
+        gamma: 10.0
+        iteration_mode: true
+        step_size: 9999999999
+        two_steps:
+        - 12000
+        - 16000
+        type: two_steps_with_warmup
+        warm_up_end: 200
+    type: AdamW
+pretrained_weight: null
+source_filename: projects/neuralangelo/configs/custom/synthetic_chair.yaml
+speed_benchmark: false
+test_data:
+    name: dummy
+    num_workers: 0
+    test:
+        batch_size: 1
+        is_lmdb: false
+        roots: null
+    type: imaginaire.datasets.images
+timeout_period: 9999999
+trainer:
+    amp_config:
+        backoff_factor: 0.5
+        enabled: false
+        growth_factor: 2.0
+        growth_interval: 2000
+        init_scale: 65536.0
+    ddp_config:
+        find_unused_parameters: false
+        static_graph: true
+    depth_vis_scale: 0.5
+    ema_config:
+        beta: 0.9999
+        enabled: false
+        load_ema_checkpoint: false
+        start_iteration: 0
+    grad_accum_iter: 1
+    image_to_tensorboard: false
+    init:
+        gain: null
+        type: none
+    loss_weight:
+        curvature: 0.0005
+        eikonal: 0.1
+        render: 1.0
+    type: projects.neuralangelo.trainer
+validation_iter: 99999999
+wandb_image_iter: 10000
+wandb_scalar_iter: 100

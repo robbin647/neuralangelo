@@ -1,0 +1,50 @@
+_parent_: projects/neuralangelo/configs/base.yaml
+data:
+    # Must use single data loader for debugging purposes
+    num_workers: 0
+    preload: false
+    readjust:
+        center:
+        - 0.0
+        - 0.0
+        - 0.0
+        scale: 1.0
+    root: /root/autodl-tmp/data/nerf_synthetic/lego
+    train:
+        batch_size: 2
+        image_size:
+        - 801
+        - 801
+    type: robust.robust_dataset
+    # type: projects.neuralangelo.data    
+    val:
+        image_size:
+        - 300
+        - 400
+model:
+    type: robust.robust_model
+    # type: projects.neuralangelo.model
+    appear_embed:
+        enabled: false
+    object:
+        sdf:
+            encoding:
+                coarse2fine:
+                    init_active_level: 4
+                hashgrid:
+                    dict_size: 19
+            mlp:
+                inside_out: false
+trainer:
+    type: robust.robust_trainer
+    # ddp_config:
+    #     static_graph: false # fine tuning according to iterations
+    # type: projects.neuralangelo.trainer
+checkpoint:
+    save_iter: 2000
+image_save_iter: 4000
+logdir: /root/autodl-tmp/data/neuralangelo_log/test_stub
+logging_iter: 9999999999
+max_epoch: 9999999999
+max_iter: 2000
+validation_iter: 1000

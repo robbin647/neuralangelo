@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from robust.configs.dotdict_class import DotDict
-from robust.networks.vision_transformer import ViTModel
+from robust.networks.vision_transformer import NanViTModel
 from robust.projection import Projector 
 from robust.robust_dataset import Dataset as RobustDataset
 from projects.neuralangelo.model import Model as NeuraModel
@@ -81,16 +81,18 @@ class Model(NeuraModel):
         # TODO: tweak the ViTModel to make the final output [B,R,S,256]
         RAY_TRANSFOMRE_CFG = DotDict({
         "num_encoder_block": 1,
-        "n_head": 1,    
-        "embedding_size": 3,
-        "final_out_size": 64, # controls the output size at the end of the last MLP 
-        "kernel_size": [3, 3], # (optional) only when using RTMLP, the kernel size in feature extraction step
-        "model_k_size": 3,
-        "model_v_size": 3,
+        "n_head": 3,    
+        "embedding_size": math.prod(self.local_args["kernel_size"])*3, # k*k*3
+        "final_out_size": 256, # controls the output size at the end of the whole transformer 
+        "kernel_size": self.local_args["kernel_size"], # (optional) only when using RTMLP, the kernel size in feature extraction step
+        "seq_length": 4, #(required for nan) the N_SRC a.k.a. number of views in feature extraction step
+        "model_k_size": 9,
+        "model_v_size": 9,
+        "mlp_dim": 512,
         "dropout_rate": 0.1,
-        "mlp_type": "RTMLP"
+        "mlp_type": "ViTMLP"
         })
-        self.ray_transformer = ViTModel(RAY_TRANSFOMRE_CFG) 
+        self.ray_transformer = NanViTModel(RAY_TRANSFOMRE_CFG) 
         self.expander, self.reshape_features = pixel_location_expander_factory(kernel_size=self.local_args['kernel_size'])
         self.sdf_ray_mlp = nn.Sequential(nn.Linear(512, 256), nn.ELU(inplace=True))
        
@@ -131,9 +133,11 @@ class Model(NeuraModel):
         
         
         batched_neighbor_rgb = torch.cat(batched_neighbor_rgb, dim=0) # [n_batch, n_rays, n_samples, N_SRC, kernel_x, kernel_y, 3]
-        n_batch, n_rays, n_samples,_ ,_ ,_ , _ = batched_neighbor_rgb.shape
-        # merge [N_SRC, k, k] into one single dimension 
-        batched_neighbor_rgb = batched_neighbor_rgb.reshape((n_batch, n_rays, n_samples, -1, 3)) # [n_batch, n_rays, n_samples, N_SRC *kernel_x *kernel_y, 3]
+        n_batch, n_rays, n_samples, n_views ,_ ,_ , _ = batched_neighbor_rgb.shape
+        """ Design 1: merge [N_SRC, k, k] into one single dimension """
+        #  batched_neighbor_rgb = batched_neighbor_rgb.reshape((n_batch, n_rays, n_samples, -1, 3)) # [n_batch, n_rays, n_samples, N_SRC *kernel_x *kernel_y, 3]
+        """Design 2: merge [k,k,3] into one single dimension """
+        batched_neighbor_rgb = batched_neighbor_rgb.reshape((n_batch, n_rays, n_samples, n_views, -1)) # # [n_batch, n_rays, n_samples, N_SRC, *kernel_x *kernel_y *3]
         rt_out, _ = self.ray_transformer(batched_neighbor_rgb) #[B,R,S,256]
         ############### END NOISE AWARE MODULE #################
         

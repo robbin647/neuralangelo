@@ -603,6 +603,29 @@ class Checkpointer(object):
             sched=self.sched.state_dict(),
         )
 
+    def load_neura_only(self, neura_checkpoint=None):
+        """
+        This only loads the pre-trained neuralangelo module. It does NOT load 
+            shceduler, optimizer, training iterations etc.
+        :param neura_checkpoint (str): path to checkpoint
+        """
+        if neura_checkpoint is None or self._check_checkpoint_exists(neura_checkpoint) == False:
+            raise Exception(f"Checkpoint {neura_checkpoint} not found!")
+        state_dict = torch.load(neura_checkpoint, map_location=lambda storage, loc: storage)
+        neura_modules = ["appear_embed",
+                         "appear_embed_outside",
+                         "neural_sdf",
+                         "neural_rgb",
+                         "background_nerf"
+        ]
+        for submodule_name in neura_modules:
+            try: 
+                _mod = self.model.modules.get_submodule(submodule_name)
+            except AttributeError:
+                continue
+            _mod.load_state_dict(state_dict['model'][submodule_name], strict=self.strict_resume)
+        torch.cuda.empty_cache()
+
     def load(self, checkpoint_path=None, resume=False, load_opt=True, load_sch=True, **kwargs):
         r"""Load network weights, optimizer parameters, scheduler parameters from a checkpoint.
         Args:

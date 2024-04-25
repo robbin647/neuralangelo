@@ -11,9 +11,11 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 '''
 
 import json
+import pdb
 import numpy as np
 import torch
 import torchvision.transforms.functional as torchvision_F
+import os.path as osp
 from PIL import Image, ImageFile
 
 from projects.nerf.datasets import base
@@ -28,6 +30,7 @@ class Dataset(base.Dataset):
         super().__init__(cfg, is_inference=is_inference, is_test=False)
         cfg_data = cfg.data
         self.root = cfg_data.root
+        self.image_folder_name = cfg_data.image_folder_name
         self.preload = cfg_data.preload
         self.H, self.W = cfg_data.val.image_size if is_inference else cfg_data.train.image_size
         meta_fname = f"{cfg_data.root}/transforms.json"
@@ -86,7 +89,9 @@ class Dataset(base.Dataset):
 
     def get_image(self, idx):
         fpath = self.list[idx]["file_path"]
-        image_fname = f"{self.root}/{fpath}"
+        fname = osp.basename(fpath)
+        # image_fname = f"{self.root}/{fpath}" # Adaptive to data.image_folder_name flag in config yaml
+        image_fname = f"{self.root}/{self.image_folder_name}/{fname}"
         image = Image.open(image_fname)
         image.load()
         image_size_raw = image.size

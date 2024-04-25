@@ -12,6 +12,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import argparse
 import os
+import pdb
 
 import imaginaire.config
 from imaginaire.config import Config, recursive_update_strict, parse_cmdline_arguments
@@ -80,6 +81,7 @@ def main():
     trainer.set_data_loader(cfg, split="train")
     trainer.set_data_loader(cfg, split="val")
     trainer.checkpointer.load(args.checkpoint, args.resume, load_sch=True, load_opt=True)
+    # trainer.checkpointer.load_neura_only(args.checkpoint)
 
     # Initialize Wandb.
     trainer.init_wandb(cfg,

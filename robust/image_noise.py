@@ -8,11 +8,10 @@ import PIL.Image as Image
 import torchvision.transforms.functional as F
 import cv2
 import torchvision
-
+import argparse
+import pdb
 from glob import glob
 from pathlib import Path
-
-from robust.dataloaders.basic_dataset import MyNoiseDataset
 
 def add_noise(images, read_std=0.037, shot_std=0.093):
   """
@@ -40,27 +39,41 @@ def add_noise(images, read_std=0.037, shot_std=0.093):
     result.append(img)
   return torch.stack(result)
 
+def parse_args():
+    myargparser = argparse.ArgumentParser()
+    myargparser.add_argument("--root", type=str, default=None, action="append", help="A list of colmap scene roots")    
+    myargparser.add_argument("--image_ext", type=str, default="png", help="Image file type. Possible values: png, jpg")
+    return myargparser.parse_args()
+
 if __name__ == '__main__':
     '''
     Create noised images for each multiview scene
     '''
-    scene_roots = ['/root/autodl-tmp/data/nerf_synthetic/lego',
-                    '/root/autodl-tmp/data/nerf_synthetic/chair',
-                    '/root/autodl-tmp/data/dtu/dtu_scan24',
-                    '/root/autodl-tmp/data/dtu/dtu_scan37']
-    noise_levels = {"noise_1":{"read_std": 3.7e-2, "shot_std": 9.3e-2},
-                    "noise_2": {"read_std": 1.48e-1, "shot_std":3.72e-1 }}
-    for lv, lv_cfg in noise_levels.items:
+    args = parse_args()
+    print(args)
+
+    if args.root is not None:
+      scene_roots = args.root
+    else: 
+      scene_roots = ['/root/autodl-tmp/data/nerf_synthetic/lego',
+                  # '/root/autodl-tmp/data/nerf_synthetic/chair',
+                  # '/root/autodl-tmp/data/dtu/dtu_scan24',
+                  # '/root/autodl-tmp/data/dtu/dtu_scan37'
+                  ]
+    noise_levels = {"noise_2": {"read_std": 1.48e-1, "shot_std":3.72e-1 },
+                    "noise_1":{"read_std": 3.7e-2, "shot_std": 9.3e-2},
+                    }
+    for lv, lv_cfg in noise_levels.items():
         for root in scene_roots:
             rgb_files = []
-            if not root.endswith("lego"):
-                rgb_files = glob(osp.join(root, 'images') + '/*.png')
-            else:
+            if args.image_ext == "jpg":
                 rgb_files = glob(osp.join(root, 'images') + '/*.jpg')
+            else:
+                rgb_files = glob(osp.join(root, 'images') + '/*.png')
             
             noise_image_folder = osp.join(root, lv)
             os.makedirs(noise_image_folder, exist_ok = True)
-
+            pdb.set_trace()
             for _file in rgb_files:
                 noise_image_file = osp.join(noise_image_folder, osp.basename(_file))
                 clean_array = cv2.cvtColor(cv2.imread(_file), cv2.COLOR_BGR2RGB)

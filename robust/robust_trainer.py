@@ -17,6 +17,8 @@ import torch.nn.functional as torch_F
 import tqdm
 import wandb
 import os
+import os.path as osp
+import pdb
 
 from torch.autograd import profiler
 from torch.cuda.amp import GradScaler, autocast
@@ -27,7 +29,6 @@ from imaginaire.utils.visualization import wandb_image
 from projects.nerf.trainers.base import BaseTrainer
 from projects.neuralangelo.utils.misc import get_scheduler, eikonal_loss, curvature_loss
 from torch.utils.tensorboard import SummaryWriter
-writer = SummaryWriter(log_dir="/root/autodl-tmp/data/neuralangelo_log/test_stub", filename_suffix="tensorevent")
 tensorboard_log_interval = 10
 
 class Trainer(BaseTrainer):
@@ -40,7 +41,12 @@ class Trainer(BaseTrainer):
         if cfg.model.object.sdf.encoding.type == "hashgrid" and cfg.model.object.sdf.encoding.coarse2fine.enabled:
             self.c2f_step = cfg.model.object.sdf.encoding.coarse2fine.step
             self.model.module.neural_sdf.warm_up_end = self.warm_up_end
-
+        if cfg.logdir is None:
+            raise Exception("cfg.logdir!")
+        else:
+            global writer # Accessible throughout this module
+            writer = SummaryWriter(log_dir=osp.abspath(cfg.logdir))
+    
     def _init_loss(self, cfg):
         self.criteria["render"] = torch.nn.L1Loss()
 
@@ -50,7 +56,7 @@ class Trainer(BaseTrainer):
     def _compute_loss(self, data, mode=None):
         if mode == "train":
             # Compute loss only on randomly sampled rays.
-            self.losses["render"] = self.criteria["render"](data["rgb"], data["image_sampled"]) * 3  # FIXME:sumRGB?!
+            self.losses["render"] = self.criteria["render"](data["rgb"], data["image_sampled"]) * 3  # ==L1Loss FIXME:sumRGB?!
             self.metrics["psnr"] = -10 * torch_F.mse_loss(data["rgb"], data["image_sampled"]).log10()
             if "eikonal" in self.weights.keys():
                 self.losses["eikonal"] = eikonal_loss(data["gradients"], outside=data["outside"])
@@ -175,15 +181,24 @@ class Trainer(BaseTrainer):
             'dtype': autocast_dtype
         }
         with autocast(**amp_kwargs):
-            total_loss, rgb_contrast = self.model_forward(data)
+            """Case 1: neuralangelo 和 nan始终一起train"""
+            # total_loss, rgb_contrast = self.model_forward(data)
+            """Case 2: 2000个iteration以后开始交替fine tune两个部分"""
+            # if (global_iter // 1000) % 2 == 1: # 奇数*1000 ~ 偶数*1000个iteration
+            #     total_loss, rgb_contrast = self.model_fine_tune(data, freeze_part="nan")
+            # else:
+            #     total_loss, rgb_contrast = self.model_fine_tune(data, freeze_part="neuralangelo")
+            """Case 3: 0-1999 iteration间先冻住neuralangelo只是train nan"""
+            total_loss, rgb_contrast = self.model_fine_tune(data, freeze_part="neuralangelo")
+
             # Scale down the loss w.r.t. gradient accumulation iterations.
             total_loss = total_loss / float(self.cfg.trainer.grad_accum_iter)
             
             writer.add_scalars("losses", self.losses, global_step=global_iter)
             writer.add_scalars("metrics", self.metrics, global_step=global_iter)
-            if global_iter % 50 == 0:
-                writer.add_embedding(rgb_contrast[0][0].reshape(1, -1), metadata=["pred_{0}"], global_step=global_iter)
-                writer.add_embedding(rgb_contrast[1][0].reshape(1, -1), metadata=["gt_{0}"], global_step=global_iter)
+            # if global_iter % 50 == 0:
+            #     writer.add_embedding(rgb_contrast[0][0].reshape(1, -1), metadata=["pred_{0}"], global_step=global_iter)
+            #     writer.add_embedding(rgb_contrast[1][0].reshape(1, -1), metadata=["gt_{0}"], global_step=global_iter)
         # Backpropagate the loss.
         self.timer._time_before_backward()
         self.scaler.scale(total_loss).backward()
@@ -205,6 +220,69 @@ class Trainer(BaseTrainer):
 
         self._detach_losses()
         self.timer._time_before_leave_gen()
+
+    """Freeze neuralangelo's weights and train noise-aware module"""
+    def model_fine_tune(self, data, freeze_part):
+        assert freeze_part in ["neuralangelo", "nan"]
+        neura_modules = ["appear_embed", # may be None
+                         "appear_embed_outside", # may be None
+                         "neural_sdf",
+                         "neural_rgb",
+                         "background_nerf"
+        ]
+        nan_modules = ["ray_transformer",
+                       "sdf_ray_mlp"
+        ]
+
+        def disable_grads_recursive(mod: torch.nn.Module):
+            submodule_list = [c for c in mod.children()]
+            if len(submodule_list) == 0: 
+                mod.requires_grad_(False)
+                return
+            for submodule in submodule_list:
+                disable_grads_recursive(submodule)
+
+        def enable_grads_recursive(mod: torch.nn.Module):
+            submodule_list = [c for c in mod.children()]
+            if len(submodule_list) == 0: 
+                mod.requires_grad_(True)
+                return
+            for submodule in submodule_list:
+                enable_grads_recursive(submodule)
+
+        if freeze_part == "neuralangelo": 
+            for _mod_name in neura_modules:
+                if _mod_name == "neural_sdf":
+                    # special handling of tcnn_encoding
+                    _neural_sdf = self.model.module.get_submodule(_mod_name)
+                    for subname, submodule in _neural_sdf.named_children():
+                        if subname == "tcnn_encoding":
+                            continue # tcnn hash table state has already disabled gradients
+                        disable_grads_recursive(submodule)
+                else:                     
+                    try:  
+                        disable_grads_recursive(self.model.module.get_submodule(_mod_name))
+                    except AttributeError: # okay when named module does not exist, just skip it
+                        continue
+            for _mod_name in nan_modules:
+                enable_grads_recursive(self.model.module.get_submodule(_mod_name))
+        elif freeze_part == "nan":
+            for _mod_name in nan_modules:
+                disable_grads_recursive(self.model.module.get_submodule(_mod_name))
+            for _mod_name in neura_modules:
+                if _mod_name == "neural_sdf":
+                    # special handling of tcnn_encoding
+                    _neural_sdf = self.model.module.get_submodule(_mod_name)
+                    for subname, submodule in _neural_sdf.named_children():
+                        if subname == "tcnn_encoding":
+                            continue # tcnn hash table state has already disabled gradients
+                        enable_grads_recursive(submodule)
+                else:                        
+                    try:
+                        enable_grads_recursive(self.model.module.get_submodule(_mod_name))
+                    except AttributeError: # okay when named module does not exist, just skip it
+                        continue
+        return self.model_forward(data)
 
     """Optional to override parents' model_forward """
     def model_forward(self, data): 

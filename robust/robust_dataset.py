@@ -101,7 +101,8 @@ class Dataset(base.Dataset):
             neighbor_poses = torch.cat(neighbor_poses, dim=0) # [N_SRC, 34]
             sample.update(
                 neighbor_rgbs=neighbor_rgbs,
-                neighbor_poses=neighbor_poses
+                neighbor_poses=neighbor_poses,
+                neighbor_ids=nearest_views_ids
             )
 
         else:  # keep image during inference
