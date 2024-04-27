@@ -263,7 +263,7 @@ class RayRender:
         """
         # Project the pts along the rays batch on all others views (src views)
         # based on the target camera and src cameras (intrinsics - K, rotation - R, translation - t)
-        
+        pdb.set_trace()
         proj_out = self.projector.compute(pts, ray_batch['camera'], proc_src_rgbs, org_src_rgbs, sigma_estimate,
                                           ray_batch['src_cameras'],
                                           featmaps=featmaps[level])  # [N_rays, N_samples, N_views, x]

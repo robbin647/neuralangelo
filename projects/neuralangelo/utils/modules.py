@@ -10,6 +10,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 -----------------------------------------------------------------------------
 '''
 
+import pdb
 import torch
 from functools import partial
 import numpy as np
@@ -273,7 +274,10 @@ class BackgroundNeRF(torch.nn.Module):
         points_enc = self.encode(points_3D)  # [...,4+LD]
         # Volume density prediction.
         out = self.mlp_feat(points_enc)
+        # 提示activ_density："softplus"
         density, feat = self.activ_density(out[..., 0]), self.mlp_feat.activ(out[..., 1:])  # [...],[...,K]
+        if torch.sum(torch.isnan(density)) != 0:
+             pdb.set_trace()
         # RGB color prediction.
         if self.cfg_background.view_dep:
             view_enc = self.encode_view(rays_unit)  # [...,LD]

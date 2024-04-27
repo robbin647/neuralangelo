@@ -4,9 +4,11 @@ import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms.functional as VF
 
 from robust.configs.dotdict_class import DotDict
 from robust.networks.vision_transformer import NanViTModel
+from robust.networks.autoencoder import NoiseVAE
 from robust.projection import Projector 
 from robust.robust_dataset import Dataset as RobustDataset
 from projects.neuralangelo.model import Model as NeuraModel
@@ -83,18 +85,19 @@ class Model(NeuraModel):
         "num_encoder_block": 1,
         "n_head": 3,    
         "embedding_size": math.prod(self.local_args["kernel_size"])*3, # k*k*3
-        "final_out_size": 256, # controls the output size at the end of the whole transformer 
+        "final_out_size": 3, # controls the output size at the end of the whole transformer 
         "kernel_size": self.local_args["kernel_size"], # (optional) only when using RTMLP, the kernel size in feature extraction step
         "seq_length": 4, #(required for nan) the N_SRC a.k.a. number of views in feature extraction step
         "model_k_size": 9,
         "model_v_size": 9,
-        "mlp_dim": 512,
+        "mlp_dim": 256,
         "dropout_rate": 0.1,
         "mlp_type": "ViTMLP"
         })
         self.ray_transformer = NanViTModel(RAY_TRANSFOMRE_CFG) 
+        self.noise_vae = NoiseVAE(3, 128, [64, 128, 128,])
         self.expander, self.reshape_features = pixel_location_expander_factory(kernel_size=self.local_args['kernel_size'])
-        self.sdf_ray_mlp = nn.Sequential(nn.Linear(512, 256), nn.ELU(inplace=True))
+        
        
     def forward(self, data):
         
@@ -133,12 +136,14 @@ class Model(NeuraModel):
         
         
         batched_neighbor_rgb = torch.cat(batched_neighbor_rgb, dim=0) # [n_batch, n_rays, n_samples, N_SRC, kernel_x, kernel_y, 3]
+        batched_neighbor_mean = torch.mean(batched_neighbor_rgb, dim=(-4,-3,-2), keepdim=True) # [B, R, S, 1, 1, 1, 3]
+        batched_neighbor_variance = torch.mean((batched_neighbor_rgb - batched_neighbor_mean)**2, dim=(-4,-3,-2), keepdim=True) # [B, R, S, 1, 1, 1, 3]
         n_batch, n_rays, n_samples, n_views ,_ ,_ , _ = batched_neighbor_rgb.shape
         """ Design 1: merge [N_SRC, k, k] into one single dimension """
         #  batched_neighbor_rgb = batched_neighbor_rgb.reshape((n_batch, n_rays, n_samples, -1, 3)) # [n_batch, n_rays, n_samples, N_SRC *kernel_x *kernel_y, 3]
         """Design 2: merge [k,k,3] into one single dimension """
         batched_neighbor_rgb = batched_neighbor_rgb.reshape((n_batch, n_rays, n_samples, n_views, -1)) # # [n_batch, n_rays, n_samples, N_SRC, *kernel_x *kernel_y *3]
-        rt_out, _ = self.ray_transformer(batched_neighbor_rgb) #[B,R,S,256]
+        # rt_out, _ = self.ray_transformer(batched_neighbor_rgb) #[B,R,S,3]
         ############### END NOISE AWARE MODULE #################
         
         sdfs, sdf_feats = self.neural_sdf.forward(points)  # [B,R,S,1],[B,R,S,K=256]
@@ -148,8 +153,22 @@ class Model(NeuraModel):
         rays_unit = ray_unit[..., None, :].expand_as(points).contiguous()  # [B,R,N,3]
         gradients, hessians = self.neural_sdf.compute_gradients(points, training=self.training, sdf=sdfs) #[B, R, N, 3], None
         normals = F.normalize(gradients, dim=-1)  # [B,R,N,3]
-        ray_sdf_feats = self.sdf_ray_mlp(torch.cat([rt_out, sdf_feats], dim=-1)) # [B,R,S,256]
-        rgbs = self.neural_rgb.forward(points, normals, rays_unit, ray_sdf_feats, app=app)  # [B,R,N,3] 
+        rgbs = self.neural_rgb.forward(points, normals, rays_unit, sdf_feats, app=app)  # [B,R,N,3] 
+        
+        ##### DEBUG 2024-4-27
+        ray_src_image = data["image_sampled"] # [B,R,3]
+        batched_neighbor_mean.squeeze_(dim=(-4,-3,-2)) # [B, R, S, 3]
+        batched_neighbor_variance.squeeze_(dim=(-4,-3,-2)) # [B, R, S, 3]
+        self.noise_vae.encode(VF.crop(data['neighbor_rgbs'].flatten(start_dim=0, end_dim=1),
+                                             top=torch.randint(0, data['neighbor_rgbs'].shape[-2]-400, (1,)).item(),
+                                             left=torch.randint(0, data['neighbor_rgbs'].shape[-1]-400, (1,)).item(),
+                                             width=400,
+                                             height=400)
+                                    ) # input must be [B, C, H, W]
+        vae_out = self.noise_vae.add_noise(rgbs) #[B,R,S,3] # 
+        ##### DEBUG 2024-4-27
+
+        rgbs = vae_out 
         # SDF volume rendering.
         alphas = self.compute_neus_alphas(ray_unit, sdfs, gradients, dists, dist_far=far[..., None],
                                           progress=self.progress)  # [B,R,N]
@@ -164,7 +183,11 @@ class Model(NeuraModel):
         # output_object = self.render_rays_object(center, ray_unit, near, far, outside, app, stratified=stratified)
         ### FROM HERE ON######
         if self.with_background:
-            output_background = self.render_rays_background(center, ray_unit, far, app_outside, stratified=stratified)
+            output_background = self.render_rays_background_nan(center, ray_unit, far, app_outside, 
+                                                                neighbor_rgbs=data['neighbor_rgbs'],
+                                                                neighbor_poses=data['neighbor_poses'],
+                                                                tar_cam_vec=tar_cam_vec,
+                                                                stratified=stratified)
             # Concatenate object and background samples.
             # output_background["rgbs"]: [B, R, Nb=32, 3]
             rgbs = torch.cat([rgbs, output_background["rgbs"]], dim=2)  # [B,R,No+Nb,3]
@@ -174,6 +197,8 @@ class Model(NeuraModel):
             pass
         weights = render.alpha_compositing_weights(alphas)  # [B,R,No+Nb=160,1]
         # Compute weights and composite samples.
+        if torch.sum(torch.isnan(rgbs).to(torch.uint8)) != 0:
+                pdb.set_trace()
         rgb = render.composite(rgbs, weights)  # [B,R,3] <=== Volume Rendering!!
         if self.white_background:
             opacity_all = render.composite(1., weights)  # [B,R,1]
@@ -191,14 +216,55 @@ class Model(NeuraModel):
         )
         return output
     
+    """Copied from projects.neurlangelo.model::Model.render_rays_background"""
+    def render_rays_background_nan(self, center, ray_unit, far, app_outside,
+                                   neighbor_rgbs, neighbor_poses, tar_cam_vec, stratified=False,):
+        """
+        Render rays of background pixels. Added ray transformer logic
+
+        Additional params:
+            neighbor_rgbs: [batch_size, n_views, 3, h, w]
+            tar_cam_vec: [batch_size, 34]
+            neighbor_poses: [batch_size, n_views, 34]
+        """
+        with torch.no_grad():
+            dists = self.sample_dists_background(ray_unit, far, stratified=stratified)
+        points = camera.get_3D_points_from_dist(center, ray_unit, dists)  # [B,R,N,3]
+        rays_unit = ray_unit[..., None, :].expand_as(points)  # [B,R,N,3]
+        rgbs, densities = self.background_nerf.forward(points, rays_unit, app_outside)  # [B,R,N,3]
+        ############ BEGIN RAY TRANSFORMER ##########
+        # TODO: add transformer output to rgbs
+        batched_neighbor_rgb = []
+        for _b in range(neighbor_rgbs.shape[0]):
+            neighbor_rgb, neighbor_mask = self.projector_compute(neighbor_rgbs[_b], neighbor_poses[_b], tar_cam_vec[_b], xyz=points[_b])
+            neighbor_rgb = neighbor_rgb.permute(0,1,4,2,3,5)
+            neighbor_rgb *= neighbor_mask.unsqueeze(-1).unsqueeze(-1).expand(*neighbor_rgb.shape)
+            batched_neighbor_rgb.append(neighbor_rgb.unsqueeze(0))
+        batched_neighbor_rgb = torch.cat(batched_neighbor_rgb, dim=0)
+        n_batch, n_rays, n_samples, n_views ,_ ,_ , _ = batched_neighbor_rgb.shape
+        batched_neighbor_rgb = batched_neighbor_rgb.reshape((n_batch, n_rays, n_samples, n_views, -1)) 
+        # rt_out, _ = self.ray_transformer(batched_neighbor_rgb)
+        rgbs = self.noise_vae.add_noise(rgbs)
+        ############ END RAY TRANSFORMER ##########
+        alphas = render.volume_rendering_alphas_dist(densities, dists)  # [B,R,N]
+        # Collect output.
+        output = dict(
+            rgbs=rgbs,  # [B,R,3]
+            dists=dists,  # [B,R,N,1]
+            alphas=alphas,  # [B,R,N]
+        )
+        return output
+
+
     def render_pixels(self, pose, intr, image_size, stratified=False, sample_idx=None, ray_idx=None):
         return super().render_pixels(pose, intr, image_size, stratified, sample_idx, ray_idx)
 
 
     def render_rays(self, center, ray_unit, sample_idx=None, stratified=False, is_inference=False):
-        if (is_inference): # the method is called during validation, not quite implemented, just return
-            return super().render_rays(center, ray_unit, sample_idx, stratified)
-        output_object = self.render_rays_object(center, ray_unit, near, far, outside, app, stratified=stratified)
+        # Will be called during inference
+        raise NotImplementedError() # TODO: if you manipulated rgb in the forward(), you should do the same here! 
+        
+        
     
     # def render_rays_object(self, center, ray_unit, near, far, outside, ray_trans_out, app, stratified=False):
     #     """

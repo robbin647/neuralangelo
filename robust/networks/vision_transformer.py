@@ -7,6 +7,7 @@ import math
 sys.path.insert(0, '/root/autodl-tmp/code/neuralangelo')
 from robust.attention import MultiHeadAttention
 from robust.configs.dotdict_class import DotDict
+from projects.nerf.utils.nerf_util import MLPwithSkipConnection
 
 class RTMLP(nn.Module): # MLP specifically defined for ray transformer
     def __init__(self, config):
@@ -141,14 +142,25 @@ class NanViTModel(ViTModel):
     """
     def __init__(self, config: Dict):
         super().__init__(config)
-        assert config.final_out_size % config.seq_length == 0, "Warning: the mlp final output size cannot be divided by N_SRC"
-        self.reshape_mlp = nn.Linear(config.embedding_size, config.final_out_size // config.seq_length)
+        self.deep_mlp = MLPwithSkipConnection(layer_dims=[config.embedding_size*config.seq_length,
+                                                          256,
+                                                          256,
+                                                          256, 
+                                                          256, 
+                                                          config.final_out_size],
+                                              skip_connection=[2,4],
+                                              activ=nn.functional.relu_,
+                                              use_weightnorm=True)        
+        # self.deep_mlp = nn.ModuleList([nn.Sequential(config.embedding_size*config.seq_length, 256),
+        #                                nn.Sequential(256, 256),
+        #                                nn.Sequential(256, 256),
+        #                                nn.Sequential(256, config.final_out_size)])
         
     
     def forward(self, x):
         x, attn_weights = super().forward(x)
-        x = self.reshape_mlp(x) # [R, S, N_SRC, FINAL_OUT_SIZE / N_SRC]
-        x = x.reshape(x.shape[:-2] + (-1,)) # [R, S, FINAL_OUT_SIZE]
+        x = x.view(x.shape[:-2] + (-1,)) # [R, S, N_SRC*k*k*3]
+        x = self.deep_mlp(x).sigmoid_() # [R, S, 3]
         return x, attn_weights
 
 if __name__ == '__main__':
@@ -158,7 +170,7 @@ if __name__ == '__main__':
         "num_encoder_block": 1,
         "n_head": 3,    
         "embedding_size": math.prod((3,3))*3,
-        "final_out_size": 256, # controls the output size at the end of the last MLP 
+        "final_out_size": 3, # controls the output size at the end of the last MLP 
         "kernel_size": [3, 3], # (optional) only when using RTMLP, the kernel size in feature extraction step
         "seq_length": 4, #(required for nan) the N_SRC a.k.a. number of views in feature extraction step
         "model_k_size": 9,
