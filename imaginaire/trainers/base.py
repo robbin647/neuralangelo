@@ -13,6 +13,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 import importlib
 import json
 import os
+import pdb
 import threading
 import time
 import wandb
@@ -605,8 +606,8 @@ class Checkpointer(object):
 
     def load_neura_only(self, neura_checkpoint=None):
         """
-        This only loads the pre-trained neuralangelo module. It does NOT load 
-            shceduler, optimizer, training iterations etc.
+        This only loads the pre-trained neuralangelo module and last trained iteration
+        . It does NOT load shceduler, optimizer etc.
         :param neura_checkpoint (str): path to checkpoint
         """
         if neura_checkpoint is None or self._check_checkpoint_exists(neura_checkpoint) == False:
@@ -625,6 +626,10 @@ class Checkpointer(object):
                 continue
             _mod.load_state_dict(state_dict['model'][submodule_name], strict=self.strict_resume)
         torch.cuda.empty_cache()
+        self.resume_epoch = state_dict['epoch']
+        self.resume_iteration = state_dict['iteration']
+        self.sched.last_epoch = self.resume_iteration if self.iteration_mode else self.resume_epoch
+        print(f"Done with loading the checkpoint (epoch {self.resume_epoch}, iter {self.resume_iteration}).")
 
     def load(self, checkpoint_path=None, resume=False, load_opt=True, load_sch=True, **kwargs):
         r"""Load network weights, optimizer parameters, scheduler parameters from a checkpoint.

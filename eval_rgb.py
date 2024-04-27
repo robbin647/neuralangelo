@@ -12,6 +12,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import argparse
 import os
+import pdb
 import torch
 import numpy as np
 import cv2
@@ -80,10 +81,12 @@ def eval_metrics(args):
     psnr = pyiqa.create_metric("psnr", color_space='rgb').to(device)
     ssim = pyiqa.create_metric('ssim', device=device)
     lpips = pyiqa.create_metric('lpips', device=device)
+    dists = pyiqa.create_metric('dists', device=device)
 
     psnr_scores = []
     ssim_scores = []
     lpips_scores = []
+    dists_scores = []
 
     for item in glob.glob(args.dump_dir + "/gt_rgb_*.png"):
         file_name = os.path.basename(item)
@@ -92,9 +95,11 @@ def eval_metrics(args):
         _psnr = psnr(transform_function(gt_img).to(device).unsqueeze(0), transform_function(rendered_img).to(device).unsqueeze(0)).cpu().item()
         _ssim = ssim(transform_function(gt_img).to(device).unsqueeze(0), transform_function(rendered_img).to(device).unsqueeze(0)).cpu().item()
         _lpips = lpips(transform_function(gt_img).to(device).unsqueeze(0), transform_function(rendered_img).to(device).unsqueeze(0)).cpu().item()
+        _dists = dists(transform_function(gt_img).to(device).unsqueeze(0), transform_function(rendered_img).to(device).unsqueeze(0)).cpu().item()
         psnr_scores.append(_psnr)
         ssim_scores.append(_ssim)
         lpips_scores.append(_lpips)
+        dists_scores.append(_dists)
 
     print(psnr_scores)
     print("Mean PSNR: ", np.mean(np.array(psnr_scores)))
@@ -102,7 +107,8 @@ def eval_metrics(args):
     print("Mean SSIM: ", np.mean(np.array(ssim_scores)))
     print(lpips_scores)
     print("Mean LPIPS: ", np.mean(np.array(lpips_scores)))
-
+    print(dists_scores)
+    print("Mean DISTS: ", np.mean(np.array(dists_scores)))
 
 
 def main():
@@ -129,23 +135,22 @@ def main():
     imaginaire.config.DEBUG = args.debug
 
     # Create log directory for storing training results.
-    cfg.logdir = init_logging(args.config, args.logdir, makedir=True)
+    # cfg.logdir = init_logging(args.config, args.logdir, makedir=True)
 
     # Print and save final config
     if is_master():
         cfg.print_config()
-        cfg.save_config(cfg.logdir)
+        # cfg.save_config(cfg.logdir)
 
     # Initialize cudnn.
     init_cudnn(cfg.cudnn.deterministic, cfg.cudnn.benchmark)
 
     # Initialize data loaders and models.
-    trainer = get_trainer(cfg, is_inference=False, seed=args.seed)
+    trainer = get_trainer(cfg, is_inference=True, seed=args.seed)
     
     ## TODO: Figure out config for validation data loader
     trainer.set_data_loader(cfg, split="val")
     trainer.checkpointer.load(args.checkpoint, args.resume, load_sch=True, load_opt=True)
-
     trainer.mode = 'val'
 
     with torch.no_grad():
@@ -170,7 +175,8 @@ def main():
             dump_data(data, args.dump_dir, seq_idx)
             seq_idx += data["idx"].size()[0]
     
-        # eval_metrics(args)
+        eval_metrics(args)
+
 
 if __name__ == "__main__":
     main()

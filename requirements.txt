@@ -20,6 +20,7 @@ pillow
 plotly
 pyequilib
 pyexr
+pyiqa # only for custom evaluation script
 PyMCubes
 pyquaternion
 pyyaml

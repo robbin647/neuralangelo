@@ -18,7 +18,7 @@ from imaginaire.utils.distributed import master_only
 from imaginaire.utils.visualization import wandb_image
 from projects.nerf.trainers.base import BaseTrainer
 from projects.neuralangelo.utils.misc import get_scheduler, eikonal_loss, curvature_loss
-
+from torch.utils.tensorboard import SummaryWriter
 
 class Trainer(BaseTrainer):
 
@@ -30,7 +30,9 @@ class Trainer(BaseTrainer):
         if cfg.model.object.sdf.encoding.type == "hashgrid" and cfg.model.object.sdf.encoding.coarse2fine.enabled:
             self.c2f_step = cfg.model.object.sdf.encoding.coarse2fine.step
             self.model.module.neural_sdf.warm_up_end = self.warm_up_end
-
+        global LOG_WRITER
+        LOG_WRITER = SummaryWriter(log_dir=cfg.logdir) # LOG_WRITER will become available
+        print(">>>>>>>tb logging to: ", LOG_WRITER.log_dir)
     def _init_loss(self, cfg):
         self.criteria["render"] = torch.nn.L1Loss()
 
@@ -105,3 +107,13 @@ class Trainer(BaseTrainer):
     def train(self, cfg, data_loader, single_gpu=False, profile=False, show_pbar=False):
         self.progress = self.model_module.progress = self.current_iteration / self.cfg.max_iter
         super().train(cfg, data_loader, single_gpu, profile, show_pbar)
+    
+    """Override"""
+    def _end_of_iteration(self, data, current_epoch, current_iteration):
+        """
+        Log to tensorboard logdir 
+        """
+        super()._end_of_iteration(data, current_epoch, current_iteration)
+        LOG_WRITER.add_scalars("losses", self.losses, global_step=current_iteration)
+        LOG_WRITER.add_scalars("metrics", self.metrics, global_step=current_iteration)
+

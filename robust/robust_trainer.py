@@ -127,6 +127,8 @@ class Trainer(BaseTrainer):
 
         self.timer.checkpoint_tic()  # start timer
         self.timer.reset_timeout_counter()
+        freeze_weights = None
+        requires_grad(self.model_module, True)
         for current_epoch in range(start_epoch, cfg.max_epoch):
             if not single_gpu:
                 data_loader.sampler.set_epoch(current_epoch)
@@ -141,7 +143,21 @@ class Trainer(BaseTrainer):
                                       profile_memory=True,
                                       record_shapes=True) as prof:
                     data = self.start_of_iteration(data, current_iteration)
-
+                    """Case 1: neuralangelo 和 nan始终一起train"""
+                    pass
+                    """Case 2: 0-100 iteration间先冻住neuralangelo只是train nan
+                    100个iteration以后开始交替fine tune两个部分"""
+                    # if current_iteration < 100: 
+                    #     if freeze_weights != "neuralangelo":
+                    #         self.model_fine_tune(data, freeze_part="neuralangelo")
+                    #         freeze_weights = "neuralangelo"
+                    # else:
+                    #     if (current_iteration // 100) % 2 == 0 and freeze_weights != "neuralangelo": # 偶数*100 ~ 奇数*100个iteration 训练nan
+                    #         self.model_fine_tune(data, freeze_part="neuralangelo")
+                    #         freeze_weights = "neuralangelo"
+                    #     elif (current_iteration // 100) % 2 == 1 and freeze_weights != "nan": # 奇数*100 ~ 偶数*100个iteration 训练neuralangelo
+                    #         self.model_fine_tune(data, freeze_part="nan")
+                    #         freeze_weights = "nan"
                     self.train_step(data, current_iteration, last_iter_in_epoch=(it == len(data_loader) - 1))
 
                     current_iteration += 1
@@ -169,7 +185,7 @@ class Trainer(BaseTrainer):
             data (dict): Data used for the current iteration.
         """
         # Set requires_grad flags.
-        requires_grad(self.model_module, True)
+        # requires_grad(self.model_module, True)
 
         # Compute the loss.
         self.timer._time_before_forward()
@@ -181,15 +197,7 @@ class Trainer(BaseTrainer):
             'dtype': autocast_dtype
         }
         with autocast(**amp_kwargs):
-            """Case 1: neuralangelo 和 nan始终一起train"""
-            # total_loss, rgb_contrast = self.model_forward(data)
-            """Case 2: 2000个iteration以后开始交替fine tune两个部分"""
-            # if (global_iter // 1000) % 2 == 1: # 奇数*1000 ~ 偶数*1000个iteration
-            #     total_loss, rgb_contrast = self.model_fine_tune(data, freeze_part="nan")
-            # else:
-            #     total_loss, rgb_contrast = self.model_fine_tune(data, freeze_part="neuralangelo")
-            """Case 3: 0-1999 iteration间先冻住neuralangelo只是train nan"""
-            total_loss, rgb_contrast = self.model_fine_tune(data, freeze_part="neuralangelo")
+            total_loss, rgb_contrast = self.model_forward(data)
 
             # Scale down the loss w.r.t. gradient accumulation iterations.
             total_loss = total_loss / float(self.cfg.trainer.grad_accum_iter)
@@ -231,7 +239,6 @@ class Trainer(BaseTrainer):
                          "background_nerf"
         ]
         nan_modules = ["ray_transformer",
-                       "sdf_ray_mlp"
         ]
 
         def disable_grads_recursive(mod: torch.nn.Module):
@@ -282,7 +289,6 @@ class Trainer(BaseTrainer):
                         enable_grads_recursive(self.model.module.get_submodule(_mod_name))
                     except AttributeError: # okay when named module does not exist, just skip it
                         continue
-        return self.model_forward(data)
 
     """Optional to override parents' model_forward """
     def model_forward(self, data): 
