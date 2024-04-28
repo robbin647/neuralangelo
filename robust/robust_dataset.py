@@ -28,16 +28,28 @@ class Dataset(base.Dataset):
         with open(meta_fname) as file:
             self.meta = json.load(file)
         self.list = self.meta["frames"]
-        if cfg_data[self.split].subset:
-            subset = cfg_data[self.split].subset
-            subset_idx = np.linspace(0, len(self.list), subset+1)[:-1].astype(int)
-            self.list = [self.list[i] for i in subset_idx]
+        # if cfg_data[self.split].subset:
+        #     subset = cfg_data[self.split].subset
+        #     subset_idx = np.linspace(0, len(self.list), subset+1)[:-1].astype(int)
+        #     self.list = [self.list[i] for i in subset_idx]
+        if self.split == "val" and cfg_data[self.split].subset: # only when in val mode
+            self.val_subset = cfg_data[self.split].subset
         self.num_rays = cfg.model.render.rand_rays
         self.readjust = getattr(cfg_data, "readjust", None)
         # Preload dataset if possible.
         if cfg_data.preload:
             self.images = self.preload_threading(self.get_image, cfg_data.num_workers)
             self.cameras = self.preload_threading(self.get_camera, cfg_data.num_workers, data_str="cameras")
+    
+    """Override"""
+    def __len__(self):
+        """
+        In val mode, the self.list by design still contains all images, so we cannot directly return its length
+        """
+        if self.split == "train":
+            return len(self.list)
+        else:
+            return self.val_subset
 
     def __getitem__(self, idx):
         """Process raw data and return processed data in a dictionary.
@@ -88,7 +100,7 @@ class Dataset(base.Dataset):
 
         src_pose = pose
         
-        train_poses = [self.get_camera(idx)[1] for idx in range(self.__len__())] # list[N_train, tensor[3, 4]]
+        train_poses = [self.get_camera(idx)[1] for idx in range(self.list.__len__())] # list[N_train, tensor[3, 4]]
         
         train_poses = torch.cat([cam.unsqueeze(0) for cam in train_poses], dim=0) # tensor [N_train, 3, 4]
         
