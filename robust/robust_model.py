@@ -246,7 +246,10 @@ class Model(NeuraModel):
             batched_neighbor_rgb = batched_neighbor_rgb.reshape((n_batch, n_rays, n_samples, n_views, -1)) 
             # rt_out, _ = self.ray_transformer(batched_neighbor_rgb)
         # 暂时解除vae
-        rgbs = self.noise_vae.add_noise(rgbs, vae_latent)
+        if is_inference:
+            rgbs = self.noise_vae.add_noise(rgbs, latent=None, is_inference=True)
+        else:
+            rgbs = self.noise_vae.add_noise(rgbs, vae_latent)
         ############ END RAY TRANSFORMER ##########
         alphas = render.volume_rendering_alphas_dist(densities, dists)  # [B,R,N]
         # Collect output.
@@ -269,7 +272,8 @@ class Model(NeuraModel):
         app, app_outside = self.get_appearance_embedding(sample_idx, ray_unit.shape[1]) # [B,R,N,C], [B,R,N,C]
         output_object = self.render_rays_object(center, ray_unit, near, far, outside, app, stratified=stratified)
         if self.with_background:
-            output_background = self.render_rays_background_nan(center, ray_unit, far, app_outside, stratified=stratified, 
+            output_background = self.render_rays_background_nan(center, ray_unit, far, app_outside, stratified=stratified,
+                                                                vae_latent = None, 
                                                                 neighbor_rgbs=None, neighbor_poses=None,tar_cam_vec=None,
                                                                 is_inference=True)
             # Concatenate object and background samples.
@@ -277,6 +281,7 @@ class Model(NeuraModel):
             rgbs = torch.cat([output_object["rgbs"], output_background["rgbs"]], dim=2)  # [B,R,No+Nb,3]
             dists = torch.cat([output_object["dists"], output_background["dists"]], dim=2)  # [B,R,No+Nb,1]
             alphas = torch.cat([output_object["alphas"], output_background["alphas"]], dim=2)  # [B,R,No+Nb]
+            pdb.set_trace()
         else:
             rgbs = output_object["rgbs"]  # [B,R,No,3]
             dists = output_object["dists"]  # [B,R,No,1]
@@ -317,7 +322,7 @@ class Model(NeuraModel):
         normals = F.normalize(gradients, dim=-1)  # [B,R,N,3]
         rgbs = self.neural_rgb.forward(points, normals, rays_unit, feats, app=app)  # [B,R,N,3] app=None (appearance embedding)
         ###### ADD VAE #####
-        vae_out = self.noise_vae.add_noise(rgbs)
+        vae_out = self.noise_vae.add_noise(rgbs, latent=None, is_inference=True)
         #################
         rgbs = vae_out
         # SDF volume rendering.

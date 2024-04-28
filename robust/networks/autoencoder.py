@@ -31,9 +31,11 @@ class NoiseVAE(nn.Module):
                    nn.BatchNorm2d(128),
                    nn.LeakyReLU())
         ])
-        self.add_noise_mlp = nn.Sequential(MLPwithSkipConnection(layer_dims=[131,256,256,256,256,3],
-                                                   skip_connection=[1,3]),
-                                            nn.Sigmoid())
+        self.add_noise_mlp = nn.Sequential(MLPwithSkipConnection(layer_dims=[131,256,3],
+                                                   skip_connection=[],
+                                                   use_layernorm=False,
+                                                   use_weightnorm=False),
+                                            )
         # self state
         with torch.no_grad():
             # sd = self.state_dict()

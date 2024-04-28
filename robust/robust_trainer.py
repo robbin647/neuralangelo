@@ -19,6 +19,7 @@ import wandb
 import os
 import os.path as osp
 import pdb
+import torchvision
 
 from torch.autograd import profiler
 from torch.cuda.amp import GradScaler, autocast
@@ -204,6 +205,18 @@ class Trainer(BaseTrainer):
             
             writer.add_scalars("losses", self.losses, global_step=global_iter)
             writer.add_scalars("metrics", self.metrics, global_step=global_iter)
+            if (global_iter % 50) == 0:
+                ray_pred = rgb_contrast[0] # prediction [B,R=512,3]
+                ray_pred = ray_pred.view(ray_pred.shape[0], 16, -1, ray_pred.shape[-1]).permute(0,3,1,2)#[B,3,16,32]
+                ray_gt = rgb_contrast[1] # gt [B,R,3]
+                ray_gt = ray_gt.view(ray_gt.shape[0], 16, -1, ray_gt.shape[-1]).permute(0,3,1,2)#[B,3,16,32]
+                pred_grid = torchvision.utils.make_grid(ray_pred, nrow=ray_pred.shape[0], normalize=True)
+                pred_grid = (pred_grid * 255).to(torch.uint8)
+                gt_grid = torchvision.utils.make_grid(ray_gt, nrow=ray_gt.shape[0], normalize=True)
+                gt_grid = (gt_grid * 255).to(torch.uint8)
+                writer.add_image("Image/Pred", pred_grid, global_step=global_iter)
+                writer.add_image("Image/GT", gt_grid, global_step=global_iter)
+                writer.flush()
             # if global_iter % 50 == 0:
             #     writer.add_embedding(rgb_contrast[0][0].reshape(1, -1), metadata=["pred_{0}"], global_step=global_iter)
             #     writer.add_embedding(rgb_contrast[1][0].reshape(1, -1), metadata=["gt_{0}"], global_step=global_iter)
