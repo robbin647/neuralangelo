@@ -74,43 +74,43 @@ class Dataset(base.Dataset):
                 intr=intr,
                 pose=pose,
             )
-            
-            """
-            Collect N_SRC neighbor views and poses
-            Only run this in training phase
-            """        
-
-            src_pose = pose
-            
-            train_poses = [self.get_camera(idx)[1] for idx in range(self.__len__())] # list[N_train, tensor[3, 4]]
-            
-            train_poses = torch.cat([cam.unsqueeze(0) for cam in train_poses], dim=0) # tensor [N_train, 3, 4]
-            
-            nearest_views_ids = self.get_nearest_views_ids(src_pose[:3,:], train_poses[:,:3,:], num_select=4, tar_id=idx)
-            neighbor_rgbs = [] 
-            neighbor_poses = []
-            for _id in nearest_views_ids:
-                _raw_img, _raw_size = self.get_image(_id) # Image, tuple(int, int)
-                _raw_img = self.preprocess_image(_raw_img) # tensor [C, W, H]
-                neighbor_rgbs.append(_raw_img.unsqueeze(0)) 
-                _, pose_w2c = self.get_camera(_id) # tensor[3, 4] rotation & translation
-                pose_vec = self.to_camera_vector(intr, pose_w2c, self.W, self.H) # [34,]
-                neighbor_poses.append(pose_vec.unsqueeze(0)) # [1, 34]
-
-            neighbor_rgbs = torch.cat(neighbor_rgbs, dim=0) # [N_SRC, C, W, H]
-            neighbor_poses = torch.cat(neighbor_poses, dim=0) # [N_SRC, 34]
-            sample.update(
-                neighbor_rgbs=neighbor_rgbs,
-                neighbor_poses=neighbor_poses,
-                neighbor_ids=nearest_views_ids
-            )
-
+        
         else:  # keep image during inference
             sample.update(
                 image=image, # [C, W, H]
                 intr=intr,
                 pose=pose,
             )
+        """
+        Collect N_SRC neighbor views and poses
+        Needed both for training phase and eval phase
+        """        
+
+        src_pose = pose
+        
+        train_poses = [self.get_camera(idx)[1] for idx in range(self.__len__())] # list[N_train, tensor[3, 4]]
+        
+        train_poses = torch.cat([cam.unsqueeze(0) for cam in train_poses], dim=0) # tensor [N_train, 3, 4]
+        
+        nearest_views_ids = self.get_nearest_views_ids(src_pose[:3,:], train_poses[:,:3,:], num_select=4, tar_id=idx)
+        neighbor_rgbs = [] 
+        neighbor_poses = []
+        for _id in nearest_views_ids:
+            _raw_img, _raw_size = self.get_image(_id) # Image, tuple(int, int)
+            _raw_img = self.preprocess_image(_raw_img) # tensor [C, W, H]
+            neighbor_rgbs.append(_raw_img.unsqueeze(0)) 
+            _, pose_w2c = self.get_camera(_id) # tensor[3, 4] rotation & translation
+            pose_vec = self.to_camera_vector(intr, pose_w2c, self.W, self.H) # [34,]
+            neighbor_poses.append(pose_vec.unsqueeze(0)) # [1, 34]
+
+        neighbor_rgbs = torch.cat(neighbor_rgbs, dim=0) # [N_SRC, C, W, H]
+        neighbor_poses = torch.cat(neighbor_poses, dim=0) # [N_SRC, 34]
+        sample.update(
+            neighbor_rgbs=neighbor_rgbs,
+            neighbor_poses=neighbor_poses,
+            neighbor_ids=nearest_views_ids
+        )
+
         return sample
     
     @staticmethod

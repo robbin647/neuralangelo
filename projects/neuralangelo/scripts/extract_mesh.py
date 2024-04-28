@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+sys.path.insert(0, "/root/autodl-tmp/code/neuralangelo")
 import numpy as np
 from functools import partial
 
