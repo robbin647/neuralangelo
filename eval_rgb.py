@@ -19,6 +19,7 @@ import cv2
 import glob
 import pyiqa
 from torchvision.transforms import v2
+from copy import deepcopy
 
 import imaginaire.config
 from imaginaire.config import Config, recursive_update_strict, parse_cmdline_arguments
@@ -47,6 +48,7 @@ def parse_args():
     parser.add_argument('--wandb_name', default='default', type=str)
     parser.add_argument('--resume', action='store_true')
     parser.add_argument("--dump_dir",required=True, type=str, help="The directory to dump test results")
+    parser.add_argument("--nan", action="store_true", help="A flag when specified will feed nan with noise data, but validate using clean data")
     args, cfg_cmd = parser.parse_known_args()
     return args, cfg_cmd
 
@@ -150,20 +152,37 @@ def main():
     
     ## TODO: Figure out config for validation data loader
     trainer.set_data_loader(cfg, split="val")
+
+    # Make a copy of cfg and provide additional gt dataloader for nan
+    pdb.set_trace()
+    if args.nan:
+        print("*" * 40, "\n",">"*10 + "NAN evaluation enabled" + "<"*10,"\n", "*"*40)
+        gt_cfg = deepcopy(cfg) # Caution: deepcopy failed for Config object!
+        recursive_update_strict(gt_cfg, cfg)
+        gt_cfg.data.image_folder_name = "images"
+        trainer.set_data_loader(gt_cfg, split="gt")
+        # trainer.gt_data_loader will be available
+    
     trainer.checkpointer.load(args.checkpoint, args.resume, load_sch=True, load_opt=True)
     trainer.mode = 'val'
+    
 
     with torch.no_grad():
         # Initialize testing loop
         model = trainer.model.module
         model.eval()
         test_loader = trainer.eval_data_loader
+        if args.nan:
+            gt_loader = trainer.gt_data_loader
+            gt_iterator = iter(gt_loader)
         if not os.path.exists(args.dump_dir):
             os.makedirs(args.dump_dir, exist_ok=True)
 
         checkpoint_iteration = 833
         seq_idx = 0
         for it, data in enumerate(test_loader):
+            if args.nan:
+                gt_batch = next(gt_iterator)
             print("===="*2, "Iteration {}".format(it+1), "===="*2)
             data = to_device(data, "cuda")
             
@@ -172,6 +191,8 @@ def main():
             output = model.inference(data)
             data.update(output)
             
+            if args.nan: # nan only: replace the noisy validation data with real gt data
+                data['image'] = gt_batch['image']
             dump_data(data, args.dump_dir, seq_idx)
             seq_idx += data["idx"].size()[0]
     

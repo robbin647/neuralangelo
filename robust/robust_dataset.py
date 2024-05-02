@@ -7,6 +7,7 @@ import json
 import numpy as np
 import torch
 import torchvision.transforms.functional as torchvision_F
+import os.path as osp
 import pdb
 from PIL import Image, ImageFile
 
@@ -21,6 +22,7 @@ class Dataset(base.Dataset):
     def __init__(self, cfg, is_inference=False):
         super().__init__(cfg, is_inference=is_inference, is_test=False)
         cfg_data = cfg.data
+        self.image_folder_name = cfg_data.image_folder_name
         self.root = cfg_data.root
         self.preload = cfg_data.preload
         self.H, self.W = cfg_data.val.image_size if is_inference else cfg_data.train.image_size
@@ -40,7 +42,7 @@ class Dataset(base.Dataset):
         if cfg_data.preload:
             self.images = self.preload_threading(self.get_image, cfg_data.num_workers)
             self.cameras = self.preload_threading(self.get_camera, cfg_data.num_workers, data_str="cameras")
-    
+
     """Override"""
     def __len__(self):
         """
@@ -150,7 +152,9 @@ class Dataset(base.Dataset):
 
     def get_image(self, idx):
         fpath = self.list[idx]["file_path"]
-        image_fname = f"{self.root}/{fpath}"
+        fname = osp.basename(fpath)
+        # image_fname = f"{self.root}/{fpath}"
+        image_fname = f"{self.root}/{self.image_folder_name}/{fname}"
         image = Image.open(image_fname)
         image.load()
         image_size_raw = image.size

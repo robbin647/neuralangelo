@@ -25,6 +25,7 @@ from torch.autograd import profiler
 from torch.cuda.amp import GradScaler, autocast
 
 from imaginaire.utils.misc import to_cuda, requires_grad, to_cpu, Timer
+from imaginaire.datasets.utils.get_dataloader import get_val_dataloader
 from imaginaire.utils.distributed import master_only
 from imaginaire.utils.visualization import wandb_image
 from projects.nerf.trainers.base import BaseTrainer
@@ -315,3 +316,18 @@ class Trainer(BaseTrainer):
         total_loss = self._get_total_loss()
         return total_loss, rgb_contrast
     
+    """Override"""
+    def set_data_loader(self, cfg, split, shuffle=True, drop_last=True, seed=0):
+        """Set the data loader corresponding to the indicated split.
+        Args:
+            split (str): Must be either 'train', 'val', 'test', or 'gt' (for nan).
+            shuffle (bool): Whether to shuffle the data (only applies to the training set).
+            drop_last (bool): Whether to drop the last batch if it is not full (only applies to the training set).
+            seed (int): Random seed.
+        """
+        if split in ["train", "val", "test"]:
+            super().set_data_loader(cfg, split, shuffle, drop_last, seed)
+        elif split == 'gt':
+            self.gt_data_loader = get_val_dataloader(cfg, seed=seed)
+        else:
+            raise Exception(f"robust_trainer: Unrecognized split name: {split}")
