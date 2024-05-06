@@ -30,9 +30,10 @@ class Trainer(BaseTrainer):
         if cfg.model.object.sdf.encoding.type == "hashgrid" and cfg.model.object.sdf.encoding.coarse2fine.enabled:
             self.c2f_step = cfg.model.object.sdf.encoding.coarse2fine.step
             self.model.module.neural_sdf.warm_up_end = self.warm_up_end
-        global LOG_WRITER
-        LOG_WRITER = SummaryWriter(log_dir=cfg.logdir) # LOG_WRITER will become available
-        print(">>>>>>>tb logging to: ", LOG_WRITER.log_dir)
+        if not is_inference:
+            global LOG_WRITER
+            LOG_WRITER = SummaryWriter(log_dir=cfg.logdir) # LOG_WRITER will become available
+            print(">>>>>>>tb logging to: ", LOG_WRITER.log_dir)
     def _init_loss(self, cfg):
         self.criteria["render"] = torch.nn.L1Loss()
 

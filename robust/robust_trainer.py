@@ -45,7 +45,7 @@ class Trainer(BaseTrainer):
             self.model.module.neural_sdf.warm_up_end = self.warm_up_end
         if cfg.logdir is None:
             raise Exception("cfg.logdir!")
-        else:
+        elif not is_inference:
             global writer # Accessible throughout this module
             writer = SummaryWriter(log_dir=osp.abspath(cfg.logdir))
     
