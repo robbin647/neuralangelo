@@ -154,7 +154,6 @@ def main():
     trainer.set_data_loader(cfg, split="val")
 
     # Make a copy of cfg and provide additional gt dataloader for nan
-    pdb.set_trace()
     if args.nan:
         print("*" * 40, "\n",">"*10 + "NAN evaluation enabled" + "<"*10,"\n", "*"*40)
         gt_cfg = deepcopy(cfg) # Caution: deepcopy failed for Config object!

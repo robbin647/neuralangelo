@@ -29,13 +29,28 @@ class Dataset(base.Dataset):
         meta_fname = f"{cfg_data.root}/transforms.json"
         with open(meta_fname) as file:
             self.meta = json.load(file)
-        self.list = self.meta["frames"]
+        # self.list = self.meta["frames"]
+        self.list = dict(zip(range(len(self.meta['frames'])), self.meta["frames"])) #建立一个全局的index-frame词典
+        if self.split == "train":
+            if cfg_data[self.split].subset:
+                subset = cfg_data[self.split].subset
+            else:
+                subset = len(self.list.keys()) - 4
+                print(f"Warning: You didn't set subset size for {self.split} set. I am setting it to (total dataset size - 4)")
+            # subset_idx = np.linspace(0, len(self.list), subset+1)[:-1].astype(int)
+            self.train_list = list(self.list.keys())[:subset] # train_list is a list of keys of `self.list``
+        elif self.split == "val":
+            if cfg_data[self.split].subset:
+                subset = cfg_data[self.split].subset
+            else:
+                subset = 4
+            self.train_list = list(self.list.keys())[:-subset]
+            self.val_list = list(self.list.keys())[-subset:] # comment: ibid.
         # if cfg_data[self.split].subset:
         #     subset = cfg_data[self.split].subset
         #     subset_idx = np.linspace(0, len(self.list), subset+1)[:-1].astype(int)
         #     self.list = [self.list[i] for i in subset_idx]
-        if self.split == "val" and cfg_data[self.split].subset: # only when in val mode
-            self.val_subset = cfg_data[self.split].subset
+
         self.num_rays = cfg.model.render.rand_rays
         self.readjust = getattr(cfg_data, "readjust", None)
         # Preload dataset if possible.
@@ -49,9 +64,9 @@ class Dataset(base.Dataset):
         In val mode, the self.list by design still contains all images, so we cannot directly return its length
         """
         if self.split == "train":
-            return len(self.list)
+            return len(self.train_list)
         else:
-            return self.val_subset
+            return len(self.val_list)
 
     def __getitem__(self, idx):
         """Process raw data and return processed data in a dictionary.
@@ -67,14 +82,19 @@ class Dataset(base.Dataset):
                  neighbor_rgbs: (available only in training) the C*W*H pixel values from N_SRC many nearest neighbor views. [N_SRC, C, W, H] 
                  neighbor_poses: [N_SRC, 34] 34=img_size(2) + intrinsics(16) + extrinsics(16)
         """
+        # pdb.set_trace()
+        if self.split == "train": # convert the local `idx` to the key in full dataset `self.list` 
+            fullset_idx = self.train_list[idx]
+        elif self.split == "val":
+            fullset_idx = self.val_list[idx]
         # Keep track of sample index for convenience.
-        sample = dict(idx=idx)
+        sample = dict(idx=fullset_idx)
         # Get the images.
-        image, image_size_raw = self.images[idx] if self.preload else self.get_image(idx)
+        image, image_size_raw = self.images[idx] if self.preload else self.get_image(fullset_idx)
         # resize image to self.W, self.H
         image = self.preprocess_image(image)
         # Get the cameras (intrinsics and pose).
-        intr, pose = self.cameras[idx] if self.preload else self.get_camera(idx)
+        intr, pose = self.cameras[idx] if self.preload else self.get_camera(fullset_idx)
         intr, pose = self.preprocess_camera(intr, pose, image_size_raw) # Adjust the intrinsics according to the resized image
        
 
@@ -102,18 +122,19 @@ class Dataset(base.Dataset):
 
         src_pose = pose
         
-        train_poses = [self.get_camera(idx)[1] for idx in range(self.list.__len__())] # list[N_train, tensor[3, 4]]
+        train_poses = [self.get_camera(idx)[1] for idx in self.train_list] # list[N_train, tensor[3, 4]]
         
         train_poses = torch.cat([cam.unsqueeze(0) for cam in train_poses], dim=0) # tensor [N_train, 3, 4]
         
         nearest_views_ids = self.get_nearest_views_ids(src_pose[:3,:], train_poses[:,:3,:], num_select=4, tar_id=idx)
+        # nearest_views_ids are indices OF elements in self.train_list (not the elements!)
         neighbor_rgbs = [] 
         neighbor_poses = []
         for _id in nearest_views_ids:
-            _raw_img, _raw_size = self.get_image(_id) # Image, tuple(int, int)
+            _raw_img, _raw_size = self.get_image(self.train_list[_id]) # Image, tuple(int, int)
             _raw_img = self.preprocess_image(_raw_img) # tensor [C, W, H]
             neighbor_rgbs.append(_raw_img.unsqueeze(0)) 
-            _, pose_w2c = self.get_camera(_id) # tensor[3, 4] rotation & translation
+            _, pose_w2c = self.get_camera(self.train_list[_id]) # tensor[3, 4] rotation & translation
             pose_vec = self.to_camera_vector(intr, pose_w2c, self.W, self.H) # [34,]
             neighbor_poses.append(pose_vec.unsqueeze(0)) # [1, 34]
 
@@ -122,7 +143,7 @@ class Dataset(base.Dataset):
         sample.update(
             neighbor_rgbs=neighbor_rgbs,
             neighbor_poses=neighbor_poses,
-            neighbor_ids=nearest_views_ids
+            neighbor_ids=[self.train_list[_id] for _id in nearest_views_ids]
         )
 
         return sample

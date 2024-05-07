@@ -37,10 +37,24 @@ class Dataset(base.Dataset):
         with open(meta_fname) as file:
             self.meta = json.load(file)
         self.list = self.meta["frames"]
-        if cfg_data[self.split].subset:
-            subset = cfg_data[self.split].subset
-            subset_idx = np.linspace(0, len(self.list), subset+1)[:-1].astype(int)
+        # Use the images at the front of self.list for training. And the rest (default 4) images are for validation 
+        if self.split == "train":
+            if cfg_data[self.split].subset:
+                subset = cfg_data[self.split].subset
+            else:
+                subset = len(self.list) - 4
+                print(f"Warning: You didn't set subset size for {self.split} set. I am setting it to (total dataset size - 4)")
+            # subset_idx = np.linspace(0, len(self.list), subset+1)[:-1].astype(int)
+            subset_idx = np.linspace(0, subset-1, subset).astype(int) # np.linspace返回区间是前包后包！
             self.list = [self.list[i] for i in subset_idx]
+        elif self.split == "val":
+            if cfg_data[self.split].subset:
+                subset = cfg_data[self.split].subset
+            else:
+                subset = 4
+            subset_idx = np.linspace(len(self.list)-subset, len(self.list)-1, subset).astype(int)
+            self.list = [self.list[i] for i in subset_idx]    
+
         self.num_rays = cfg.model.render.rand_rays
         self.readjust = getattr(cfg_data, "readjust", None)
         # Preload dataset if possible.
