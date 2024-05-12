@@ -276,6 +276,8 @@ class BackgroundNeRF(torch.nn.Module):
         out = self.mlp_feat(points_enc)
         # 提示activ_density："softplus"
         density, feat = self.activ_density(out[..., 0]), self.mlp_feat.activ(out[..., 1:])  # [...],[...,K]
+        if torch.sum(torch.isnan(density)) != 0:
+             pdb.set_trace()
         # RGB color prediction.
         if self.cfg_background.view_dep:
             view_enc = self.encode_view(rays_unit)  # [...,LD]

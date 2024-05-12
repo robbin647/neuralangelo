@@ -168,6 +168,8 @@ class Trainer(BaseTrainer):
                     if it == len(data_loader) - 1:
                         self.end_of_iteration(data, current_epoch + 1, current_iteration)
                     else:
+
+                        print("Iter ", current_iteration, self.losses)
                         self.end_of_iteration(data, current_epoch, current_iteration)
                     if current_iteration >= cfg.max_iter:
                         print('Done with training!!!')
